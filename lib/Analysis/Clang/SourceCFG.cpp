@@ -272,6 +272,7 @@ void SourceCFG::deleteEdge(SourceCFGEdge &_Edge) {
 	delete &_Edge;
 }
 
+/*
 void SourceCFGNode::merge(SourceCFGNode &NodeToAttach) {
 	for (auto E : NodeToAttach.getEdges()) {
 		SourceCFGNodeBase::addEdge(*E);
@@ -279,11 +280,12 @@ void SourceCFGNode::merge(SourceCFGNode &NodeToAttach) {
 	}
 	SBB.addOp(NodeToAttach.SBB.begin(), NodeToAttach.SBB.end());
 }
+*/
 
-SourceCFGNode *SourceCFG::splitNode(SourceCFGNode &Node, int It) {
+DefaultNode *SourceCFG::splitNode(DefaultNode &Node, int It) {
 	if (It==0)
 		return &Node;
-	SourceCFGNode *NewNode=&emplaceNode(SourceCFGNode::NodeKind::Default);
+	DefaultNode *NewNode=&emplaceNode();
 	for (auto E : Node.getEdges())
 		NewNode->addEdge(*E);
 	Node.clear();
@@ -333,7 +335,7 @@ void SourceCFGBuilder::eliminateUnreached() {
 }
 
 void SourceCFGBuilder::processLabels() {
-	std::map<SourceCFGNode*, vector<GotoInfo>> OrderingMap;
+	std::map<DefaultNode*, vector<GotoInfo>> OrderingMap;
 	for (auto GotoIt=mGotos.begin(); GotoIt!=mGotos.end(); ++GotoIt)
 		if (OrderingMap.find(mLabels[GotoIt->first].Node)!=OrderingMap.end())
 			OrderingMap[mLabels[GotoIt->first].Node].push_back({GotoIt,
@@ -387,7 +389,7 @@ void SourceCFGBuilder::parseStmt(Stmt *Root) {
 	Stmt::StmtClass Type=Root->getStmtClass();
 	if ((!mEntryNode || !mNodeToAdd) &&
 		Type!=Stmt::StmtClass::CompoundStmtClass) {
-		mNodeToAdd=&mSCFG->emplaceNode(SourceCFGNode::NodeKind::Default);
+		mNodeToAdd=&mSCFG->emplaceNode();
 		if (!mEntryNode)
 			mEntryNode=mNodeToAdd;
 		for (auto Outs : mDirectOut.top())
@@ -410,7 +412,7 @@ void SourceCFGBuilder::parseStmt(Stmt *Root) {
 
 void SourceCFGBuilder::continueFlow(NodeOp *Op) {
 	if (!mNodeToAdd) {
-		mNodeToAdd=&mSCFG->emplaceNode(SourceCFGNode::NodeKind::Default);
+		mNodeToAdd=&mSCFG->emplaceNode();
 		mNodeToAdd->addOp(Op);
 		for (auto Outs : mDirectOut.top())
 			mSCFG->bindNodes(*Outs.first, *mNodeToAdd, Outs.second);
@@ -432,13 +434,13 @@ void SourceCFGBuilder::processIndirect(SourceCFGNode *CondStartNode) {
 
 void SourceCFGBuilder::parseExpr(tsar::Op O, NodeOp *ParentOp,
 		bool isFirstCall) {
-	SourceCFGNode *OldNodeToAdd;
+	DefaultNode *OldNodeToAdd;
 	WrapperNodeOp *NewNodeOp;
 	if (O.IsStmt) {
 		Stmt::StmtClass Type=O.S->getStmtClass();
 		if (isa<ConditionalOperator>(*O.S)) {
 			MarkedOutsType UpperOuts;
-			SourceCFGNode *ConditionNode, *TrueNode, *FalseNode;
+			DefaultNode *ConditionNode, *TrueNode, *FalseNode;
 			ConditionalOperator &CO=*(ConditionalOperator*)O.S;
 			auto OldEntryNode=mEntryNode;
 			auto OldTreeTopParentPtr=mTreeTopParentPtr;
@@ -545,7 +547,7 @@ void SourceCFGBuilder::parseExpr(tsar::Op O, NodeOp *ParentOp,
 
 void SourceCFGBuilder::parseCompoundStmt(CompoundStmt *Root) {
 	MarkedOutsType UpperOuts;
-	SourceCFGNode *ResultEntryNode=mEntryNode;
+	DefaultNode *ResultEntryNode=mEntryNode;
 	mDirectOut.push(MarkedOutsType());
 	for (auto S : Root->body()) {
 		parseStmt(S);
@@ -560,21 +562,19 @@ void SourceCFGBuilder::parseCompoundStmt(CompoundStmt *Root) {
 }
 
 void SourceCFGBuilder::parseDoStmt(DoStmt *Root) {
-	SourceCFGNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode, *Body;
+	DefaultNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode, *Body;
 	mContinueOut.push(OutsType());
 	mBreakOut.push(OutsType());
 	mDirectOut.push(MarkedOutsType());
 	if (mStartNode->size()==0)
 		Body=mStartNode;
 	else {
-		Body=mEntryNode=mNodeToAdd=&mSCFG->emplaceNode(
-				SourceCFGNode::NodeKind::Default);
+		Body=mEntryNode=mNodeToAdd=&mSCFG->emplaceNode();
 		mSCFG->bindNodes(*mStartNode, *Body, SourceCFGEdge::EdgeKind::Default);
 	}
 	parseStmt(Root->getBody());
 	if (!mContinueOut.top().empty() || !mNodeToAdd) {
-		CondStartNode=mNodeToAdd=&mSCFG->emplaceNode(
-				SourceCFGNode::NodeKind::Default);
+		CondStartNode=mNodeToAdd=&mSCFG->emplaceNode();
 		for (auto Outs : mDirectOut.top())
 			mSCFG->bindNodes(*Outs.first, *CondStartNode, Outs.second);
 		mDirectOut.top().clear();
@@ -595,7 +595,7 @@ void SourceCFGBuilder::parseDoStmt(DoStmt *Root) {
 }
 
 void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
-	SourceCFGNode *mStartNode=mNodeToAdd, *CondStartNode=nullptr,
+	DefaultNode *mStartNode=mNodeToAdd, *CondStartNode=nullptr,
 		*CondEndNode=nullptr, *Body=nullptr, *IncStartNode=nullptr, *LoopNode;
 	MarkedOutsType AfterInitOuts;
 	mContinueOut.push(OutsType());
@@ -610,8 +610,7 @@ void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
 		if (mNodeToAdd && mNodeToAdd->size()==0)
 			CondStartNode=mNodeToAdd;
 		else {
-			CondStartNode=mNodeToAdd=&mSCFG->emplaceNode(
-					SourceCFGNode::NodeKind::Default);
+			CondStartNode=mNodeToAdd=&mSCFG->emplaceNode();
 			for (auto Out : mDirectOut.top())
 				mSCFG->bindNodes(*Out.first, *CondStartNode, Out.second);
 			mDirectOut.top().clear();
@@ -655,13 +654,13 @@ void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
 
 void SourceCFGBuilder::parseSwitchStmt(SwitchStmt *Root) {
 	mBreakOut.push(OutsType());
-	SourceCFGNode *CondStartNode=mNodeToAdd, *CondEndNode;
+	DefaultNode *CondStartNode=mNodeToAdd, *CondEndNode;
 	parseExpr(Root->getCond(), new WrapperNodeOp(Root), true);
 	CondEndNode=mNodeToAdd;
 	mEntryNode=mNodeToAdd=nullptr;
 	parseStmt(Root->getBody());
 	processIndirect(nullptr);
-	std::map<SourceCFGNode*, vector<int>> OrderingMap;
+	std::map<DefaultNode*, vector<int>> OrderingMap;
 	for (auto CaseIt : mCases)
 		if (OrderingMap.find(CaseIt.second.Node)!=OrderingMap.end())
 			OrderingMap[CaseIt.second.Node].push_back(CaseIt.second.LabelIt);
@@ -694,14 +693,13 @@ void SourceCFGBuilder::parseWhileStmt(WhileStmt *Root) {
 	mContinueOut.push(OutsType());
 	mBreakOut.push(OutsType());
 	mDirectOut.push(MarkedOutsType());
-	SourceCFGNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode;
+	DefaultNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode;
 	if (mStartNode->size()==0) {
 		CondStartNode=mStartNode;
 		parseExpr(Root->getCond(), new WrapperNodeOp(Root), true);
 	}
 	else {
-		CondStartNode=mNodeToAdd=&mSCFG->emplaceNode(
-				SourceCFGNode::NodeKind::Default);
+		CondStartNode=mNodeToAdd=&mSCFG->emplaceNode();
 		mSCFG->bindNodes(*mStartNode, *CondStartNode,
 				SourceCFGEdge::EdgeKind::Default);
 		parseExpr(Root->getCond(), new WrapperNodeOp(Root), true);
@@ -725,7 +723,7 @@ void SourceCFGBuilder::parseWhileStmt(WhileStmt *Root) {
 
 void SourceCFGBuilder::parseIfStmt(IfStmt *Root) {
 	MarkedOutsType UpperOuts;
-	SourceCFGNode *CondStartNode=mNodeToAdd, *CondEndNode;
+	DefaultNode *CondStartNode=mNodeToAdd, *CondEndNode;
 	Stmt *ActionStmt;
 	parseExpr(Root->getCond(), new WrapperNodeOp(Root), true);
 	CondEndNode=mNodeToAdd;

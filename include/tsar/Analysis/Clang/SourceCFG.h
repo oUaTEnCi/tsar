@@ -114,8 +114,11 @@ struct ReferenceNodeOp : NodeOp {
 	}
 };
 
+class ServiceNode;
+class DefaultNode;
+
 class SourceBasicBlock {
-	friend class SourceCFGNode;
+	friend class DefaultNode;
 public:
 	using OpStorageType=std::vector<NodeOp*>;
 	using iterator=OpStorageType::iterator;
@@ -182,29 +185,8 @@ private:
 
 class SourceCFGNode : public SourceCFGNodeBase {
 	friend class SourceCFG;
-	friend class SourceCFGBuilder;
 public:
-	enum class NodeKind {Default, GraphStart, GraphStop};
-	SourceCFGNode(const NodeKind _Kind) : mKind(_Kind) {}
-	SourceCFGNode(const SourceCFGNode &_Node) = delete;
-	SourceCFGNode(SourceCFGNode &&_Node) = delete;
-	SourceCFGNode &operator=(const SourceCFGNode &_Node) = delete;
-	SourceCFGNode &operator=(SourceCFGNode &&_Node) = delete;
-	std::size_t size() { return SBB.size(); }
-	NodeOp &operator[](int Index) { return SBB[Index]; }
-	NodeKind getKind() const { return mKind; }
-	void merge(SourceCFGNode &NodeToAttach);
-
-	explicit operator std::string() const {
-		switch (mKind) {
-			case NodeKind::GraphStart:
-				return "START";
-			case NodeKind::GraphStop:
-				return "STOP";
-			case NodeKind::Default:
-				return (std::string)SBB;
-		}
-	}
+	enum class NodeKind {Default, Service};
 
 	inline SourceCFGEdge *addNewEdge(SourceCFGNode &TargetNode,
 			SourceCFGEdge::EdgeKind Ekind) {
@@ -216,7 +198,46 @@ public:
 			return nullptr;
 		}
 	}
+
+	void merge(SourceCFGNode &NodeToAttach);
 	SourceCFG *getParent() { return OwningGraph; }
+	virtual NodeKind getKind() const = 0;
+	virtual explicit operator std::string() const = 0;
+	void printAsOperand(llvm::raw_ostream &OS, bool B) { OS<<operator std::string(); }
+	virtual ~SourceCFGNode() = default;
+private:
+	SourceCFG *OwningGraph;
+};
+
+class ServiceNode : public SourceCFGNode {
+public:
+	enum class NodeType {GraphStart, GraphStop, GraphEntry};
+	ServiceNode(NodeType _mType) : mType(_mType) {}
+	NodeKind getKind() const override { return NodeKind::Service; }
+
+	explicit operator std::string() const override {
+		switch (mType) {
+			case NodeType::GraphStart:
+				return "START";
+			case NodeType::GraphStop:
+				return "STOP";
+			case NodeType::GraphEntry:
+				return "ENTRY";
+		}
+	}
+private:
+	NodeType mType;
+};
+
+class DefaultNode : public SourceCFGNode {
+	friend class SourceCFG;
+	friend class SourceCFGBuilder;
+public:
+	DefaultNode() = default;
+	std::size_t size() { return SBB.size(); }
+	NodeOp &operator[](int Index) { return SBB[Index]; }
+	NodeKind getKind() const override { return NodeKind::Default; }
+	explicit operator std::string() const override { return (std::string)SBB; }
 private:
 	inline SourceBasicBlock::iterator addOp(NodeOp *_Op) { return SBB.addOp(_Op); }
 
@@ -225,44 +246,45 @@ private:
 		return SBB.addOp(begin, end);
 	}
 
-	SourceCFG *OwningGraph;
 	SourceBasicBlock SBB;
-	NodeKind mKind;
-};
-
-class ServiceNode : public SourceCFGNode {
-
 };
 
 class SourceCFG : public SourceCFGBase {
 public:
 	SourceCFG(const std::string &_mFunctionName) : mFunctionName(_mFunctionName),
-		mStartNode(&emplaceNode(SourceCFGNode::NodeKind::GraphStart)),
-		mStopNode(&emplaceNode(SourceCFGNode::NodeKind::GraphStop)) {}
-	~SourceCFG() {
-		for (auto N : Nodes) {
-			for (auto E : N->getEdges())
-				delete E;
-			delete N;
-		}
-	}
+		mStartNode(&emplaceNode(ServiceNode::NodeType::GraphStart)),
+		mStopNode(&emplaceNode(ServiceNode::NodeType::GraphStop)) {}
+
+
 	inline bool addNode(SourceCFGNode &N) {
 		return SourceCFGBase::addNode(N)?N.OwningGraph=this, true:false;
 	}
-	SourceCFGNode &emplaceNode(SourceCFGNode::NodeKind _Nkind) {
-		SourceCFGNode *CurrNode=new SourceCFGNode(_Nkind);
+
+	DefaultNode &emplaceNode() {
+		DefaultNode *CurrNode=new DefaultNode();
 		addNode(*CurrNode);
 		return *CurrNode;
 	}
+
+	ServiceNode &emplaceNode(ServiceNode::NodeType Type) {
+		ServiceNode *CurrNode=new ServiceNode(Type);
+		addNode(*CurrNode);
+		return *CurrNode;
+	}
+
 	inline void bindNodes(SourceCFGNode &SourceNode, SourceCFGNode &TargetNode,
 			SourceCFGEdge::EdgeKind _Ekind) {
 		connect(SourceNode, TargetNode, *(new SourceCFGEdge(TargetNode, _Ekind)));
 	}
-	inline SourceCFGNode *getStartNode() const { return mStartNode; }
-	inline SourceCFGNode *getStopNode() const { return mStopNode; }
+
+	inline ServiceNode *getStartNode() const { return mStartNode; }
+	inline ServiceNode *getStopNode() const { return mStopNode; }
 	inline llvm::StringRef getName() const { return mFunctionName; }
 	void mergeNodes(SourceCFGNode &AbsorbNode, SourceCFGNode &OutgoingNode);
+	void deleteNode(SourceCFGNode &_Node);
 	void deleteEdge(SourceCFGEdge &_Edge);
+	DefaultNode *splitNode(DefaultNode &Node, int It);
+
 	bool findParentNodes(const SourceCFGNode &RequestedNode,
 			llvm::SmallVectorImpl<SourceCFGNode*> &ParentNodes) {
 		bool Result=false;
@@ -273,21 +295,29 @@ public:
 			}
 		return Result;
 	}
-	void deleteNode(SourceCFGNode &_Node);
+
 	void view(const SourceCFGNode &SCFGN,
 			const llvm::Twine &Name="source cfg") const {
 		llvm::ViewGraph(this, Name, false,
 				llvm::DOTGraphTraits<const SourceCFG*>::getGraphName(this));
 	}
+
 	std::string write(const SourceCFGNode &SCFGN,
 			const llvm::Twine &Name="source cfg") const {
 		return llvm::WriteGraph(this, Name, false,
 				llvm::DOTGraphTraits<const SourceCFG*>::getGraphName(this));
 	}
-	SourceCFGNode *splitNode(SourceCFGNode &Node, int It);
+
+	~SourceCFG() {
+		for (auto N : Nodes) {
+			for (auto E : N->getEdges())
+				delete E;
+			delete N;
+		}
+	}
 private:
 	std::string mFunctionName;
-	SourceCFGNode *mStartNode, *mStopNode;
+	ServiceNode *mStartNode, *mStopNode;
 };
 
 class SourceCFGBuilder {
@@ -300,11 +330,11 @@ private:
 	using OutsType=llvm::SmallPtrSet<SourceCFGNode*, 5>;
 	using ParserType=void (SourceCFGBuilder::*)(clang::Stmt*);
 	struct LabelInfo {
-		SourceCFGNode *Node;
+		DefaultNode *Node;
 		int LabelIt;
 	};
 	struct GotoInfo {
-		std::map<clang::LabelStmt*, SourceCFGNode*>::iterator GotoNodeIt;
+		std::map<clang::LabelStmt*, DefaultNode*>::iterator GotoNodeIt;
 		int GotoIt;
 	};
 	static bool compareLabelInfo(const LabelInfo &LI1, const LabelInfo &LI2) {
@@ -337,8 +367,8 @@ private:
 	SourceCFG *mSCFG;
 	llvm::DenseMap<clang::LabelStmt*, LabelInfo> mLabels;
 	llvm::DenseMap<clang::CaseStmt*, LabelInfo> mCases;
-	std::map<clang::LabelStmt*, SourceCFGNode*> mGotos;
-	SourceCFGNode *mEntryNode, *mNodeToAdd;
+	std::map<clang::LabelStmt*, DefaultNode*> mGotos;
+	DefaultNode *mEntryNode, *mNodeToAdd;
 	std::stack<MarkedOutsType> mDirectOut;
 	std::stack<OutsType> mContinueOut, mBreakOut;
 	NodeOp *mTreeTopParentPtr;

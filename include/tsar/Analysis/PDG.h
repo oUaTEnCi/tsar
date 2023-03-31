@@ -5,12 +5,6 @@
 #include <bcl/utility.h>
 #include "tsar/Analysis/Passes.h"
 #include "tsar/Analysis/Clang/SourceCFG.h"
-
-//#include <llvm/ADT/DirectedGraph.h>
-//#include <llvm/ADT/DenseMap.h>
-//#include <llvm/ADT/SmallVector.h>
-//#include <llvm/ADT/SmallPtrSet.h>
-//#include <llvm/ADT/GraphTraits.h>
 #include <llvm/Support/DOTGraphTraits.h>
 #include <llvm/Pass.h>
 #include <bcl/utility.h>

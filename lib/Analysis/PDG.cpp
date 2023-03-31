@@ -20,11 +20,11 @@ using namespace std;
 
 PDG *PDGBuilder::populate(const SourceCFG &_SCFG) {
     SourceCFG SCFG(_SCFG);
-    SourceCFGNode *EntryNode;
+    ServiceNode *EntryNode;
     if (!SCFG.getStopNode())
         return nullptr;
     mPDG=new tsar::PDG(string(SCFG.getName()));
-    EntryNode=&SCFG.emplaceNode(SourceCFGNode::NodeKind::Default);
+    EntryNode=&SCFG.emplaceNode(ServiceNode::NodeType::GraphEntry);
     SCFG.bindNodes(*EntryNode, *SCFG.getStartNode(), SourceCFGEdge::EdgeKind::True);
     SCFG.bindNodes(*EntryNode, *SCFG.getStopNode(), SourceCFGEdge::EdgeKind::False);
     mPDG->SCFGPD=new PostDomTreeBase<SourceCFGNode>();
