@@ -17,6 +17,8 @@
 #include <llvm/Support/GraphWriter.h>
 #include <iomanip>
 
+#include <map>		//For Inverse<SourceCFG>
+
 namespace tsar {
 
 class SourceCFGNode;
@@ -284,6 +286,11 @@ public:
 	void deleteNode(SourceCFGNode &_Node);
 	void deleteEdge(SourceCFGEdge &_Edge);
 	DefaultNode *splitNode(DefaultNode &Node, int It);
+	void recalculatePredMap();
+
+	llvm::SmallPtrSetImpl<SourceCFGNode*> &getPredMap(SourceCFGNode *Node) {
+		return mPredecessorsMap[Node];
+	}
 
 	bool findParentNodes(const SourceCFGNode &RequestedNode,
 			llvm::SmallVectorImpl<SourceCFGNode*> &ParentNodes) {
@@ -296,7 +303,7 @@ public:
 		return Result;
 	}
 
-	void view(const SourceCFGNode &SCFGN,
+	/*void view(const SourceCFGNode &SCFGN,
 			const llvm::Twine &Name="source cfg") const {
 		llvm::ViewGraph(this, Name, false,
 				llvm::DOTGraphTraits<const SourceCFG*>::getGraphName(this));
@@ -306,7 +313,7 @@ public:
 			const llvm::Twine &Name="source cfg") const {
 		return llvm::WriteGraph(this, Name, false,
 				llvm::DOTGraphTraits<const SourceCFG*>::getGraphName(this));
-	}
+	}*/
 
 	~SourceCFG() {
 		for (auto N : Nodes) {
@@ -316,6 +323,7 @@ public:
 		}
 	}
 private:
+	std::map<SourceCFGNode*, llvm::SmallPtrSet<SourceCFGNode*, 4>> mPredecessorsMap;
 	std::string mFunctionName;
 	ServiceNode *mStartNode, *mStopNode;
 };
@@ -398,6 +406,19 @@ private:
 	tsar::SourceCFG *mSCFG;
 };
 
+/*
+template<> struct Inverse<tsar::SourceCFGNode*> {
+	using PredStorageType=llvm::SmallPtrSet<tsar::SourceCFGNode*, 4>;
+	tsar::SourceCFGNode *Node;
+	PredStorageType Predecessors;
+	Inverse(tsar::SourceCFGNode *_Node) : Node(_Node) {
+		for (auto N : *Node->getParent())
+			if (N->hasEdgeTo(*Node))
+				Predecessors.insert(N);
+	}
+};
+*/
+
 template<> struct GraphTraits<tsar::SourceCFGNode*> {
 	using NodeRef=tsar::SourceCFGNode*;
 	static tsar::SourceCFGNode *SCFGGetTargetNode(tsar::SourceCFGEdge *E) {
@@ -471,6 +492,31 @@ template<> struct GraphTraits<const tsar::SourceCFG*> :
 	using EdgeRef=const tsar::SourceCFGEdge*;
 	static NodeRef edge_dest(EdgeRef E) { return &E->getTargetNode(); }
 	static unsigned size(const tsar::SourceCFG *mSCFG) { return mSCFG->size(); }
+};
+
+/*
+template<> struct GraphTraits<Inverse<tsar::SourceCFGNode*>> {
+	using NodeRef=tsar::SourceCFGNode*;
+	using ChildIteratorType=Inverse<tsar::SourceCFGNode*>::
+		PredStorageType::iterator;
+	static ChildIteratorType child_begin(NodeRef N) {
+		return Inverse(N).Predecessors.begin();
+	}
+	static ChildIteratorType child_end(NodeRef N) {
+		return Inverse(N).Predecessors.end();
+	}
+};
+*/
+
+template<> struct GraphTraits<Inverse<tsar::SourceCFGNode*>> {
+	using NodeRef=tsar::SourceCFGNode*;
+	using ChildIteratorType=SmallPtrSetImpl<tsar::SourceCFGNode*>::iterator;
+	static ChildIteratorType child_begin(NodeRef N) {
+		return N->getParent()->getPredMap(N).begin();
+	}
+	static ChildIteratorType child_end(NodeRef N) {
+		return N->getParent()->getPredMap(N).end();
+	}
 };
 
 template<> struct DOTGraphTraits<tsar::SourceCFG*> :

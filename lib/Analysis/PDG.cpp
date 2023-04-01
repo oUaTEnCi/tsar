@@ -18,21 +18,25 @@ using namespace llvm;
 using namespace clang;
 using namespace std;
 
-PDG *PDGBuilder::populate(const SourceCFG &_SCFG) {
-    SourceCFG SCFG(_SCFG);
+PDG *PDGBuilder::populate(SourceCFG &_SCFG) {
+    //SourceCFG SCFG(_SCFG);
     ServiceNode *EntryNode;
-    if (!SCFG.getStopNode())
+    if (!_SCFG.getStopNode())
         return nullptr;
-    mPDG=new tsar::PDG(string(SCFG.getName()));
-    EntryNode=&SCFG.emplaceNode(ServiceNode::NodeType::GraphEntry);
-    SCFG.bindNodes(*EntryNode, *SCFG.getStartNode(), SourceCFGEdge::EdgeKind::True);
-    SCFG.bindNodes(*EntryNode, *SCFG.getStopNode(), SourceCFGEdge::EdgeKind::False);
-    mPDG->SCFGPD=new PostDomTreeBase<SourceCFGNode>();
+    mPDG=new tsar::PDG(string(_SCFG.getName()));
     //
-    std::cout<<"Pre Calculate!!!\n";
+    mSCFG=&_SCFG;
     //
-    mPDG->SCFGPD->recalculate(SCFG);
+    EntryNode=&mSCFG->emplaceNode(ServiceNode::NodeType::GraphEntry);
+    mSCFG->bindNodes(*EntryNode, *mSCFG->getStartNode(), SourceCFGEdge::EdgeKind::True);
+    mSCFG->bindNodes(*EntryNode, *mSCFG->getStopNode(), SourceCFGEdge::EdgeKind::False);
+    mSCFG->recalculatePredMap();
+    //mPDG->SCFGPD=new PostDomTreeBase<SourceCFGNode>();
+    mPDG->SCFGDT=new DomTreeBase<SourceCFGNode>();
+    mPDG->SCFGDT->recalculate(*mSCFG);
+    //llvm::dumpDotGraphToFile(mPDG->SCFGPD, "post_dom_tree.dot", "Try 1");
     //llvm::dumpDotGraphToFile(mPDG, "post_dom_tree.dot", "Try 1");
+    //llvm::dumpDotGraphToFile(mPDG->SCFGPD, "post_dom_tree.dot", "Try 1");
     return mPDG;
 }
 
@@ -58,6 +62,7 @@ bool PDGPass::runOnFunction(Function &F) {
     return false;
 }
 
+/*
 namespace {
 struct PDGPassGraphTraits {
     static tsar::PDG *getGraph(PDGPass *P) { return &P->getPDG(); }
@@ -85,12 +90,51 @@ struct PDGViewer : public DOTGraphTraitsViewerWrapperPass<
 };
 char PDGViewer::ID = 0;
 } //anonymous namespace
+*/
 
+namespace {
+struct PDGPassGraphTraits {
+    static DomTreeBase<tsar::SourceCFGNode> *getGraph(PDGPass *P) { return &P->getDomTree(); }
+};
+
+struct PDGPrinter : public DOTGraphTraitsPrinterWrapperPass<
+    PDGPass, false, DomTreeBase<tsar::SourceCFGNode>*,
+    PDGPassGraphTraits> {
+    static char ID;
+    PDGPrinter() : DOTGraphTraitsPrinterWrapperPass<PDGPass, false,
+        DomTreeBase<tsar::SourceCFGNode>*, PDGPassGraphTraits>("dom_tree", ID) {
+        initializePDGPrinterPass(*PassRegistry::getPassRegistry());
+    }
+};
+char PDGPrinter::ID = 0;
+
+struct PDGViewer : public DOTGraphTraitsViewerWrapperPass<
+    PDGPass, false, DomTreeBase<tsar::SourceCFGNode>*,
+    PDGPassGraphTraits> {
+    static char ID;
+    PDGViewer() : DOTGraphTraitsViewerWrapperPass<PDGPass, false,
+        DomTreeBase<tsar::SourceCFGNode>*, PDGPassGraphTraits>("dom_tree", ID) {
+        initializePDGViewerPass(*PassRegistry::getPassRegistry());
+    }
+};
+char PDGViewer::ID = 0;
+} //anonymous namespace
+
+/*
 INITIALIZE_PASS_IN_GROUP(PDGViewer, "view-pdg",
     "View Program Dependency Graph", true, true,
     DefaultQueryManager::OutputPassGroup::getPassRegistry())
 
 INITIALIZE_PASS_IN_GROUP(PDGPrinter, "print-pdg",
+    "Print Program Dependency Graph", true, true,
+    DefaultQueryManager::OutputPassGroup::getPassRegistry())
+*/
+
+INITIALIZE_PASS_IN_GROUP(PDGViewer, "view-dom-tree",
+    "View Program Dependency Graph", true, true,
+    DefaultQueryManager::OutputPassGroup::getPassRegistry())
+
+INITIALIZE_PASS_IN_GROUP(PDGPrinter, "print-dom-tree",
     "Print Program Dependency Graph", true, true,
     DefaultQueryManager::OutputPassGroup::getPassRegistry())
 

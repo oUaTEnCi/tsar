@@ -311,7 +311,7 @@ void SourceCFG::mergeNodes(SourceCFGNode &AbsorbNode,
 			OutgoingNode.removeEdge(*E);
 			delete E;
 		}
-	AbsorbNode.merge(OutgoingNode);
+	//AbsorbNode.merge(OutgoingNode); - Not working
 	SourceCFGBase::removeNode(OutgoingNode);
 	delete &OutgoingNode;
 }
@@ -322,6 +322,21 @@ void markReached(SourceCFGNode *Node,
 	for (auto E : *Node)
 		if (!(*NodesList)[&E->getTargetNode()])
 			markReached(&E->getTargetNode(), NodesList);
+}
+
+void SourceCFG::recalculatePredMap() {
+	mPredecessorsMap.clear();
+	for (auto N : Nodes) {
+		mPredecessorsMap.insert({N, {}});
+		auto OutcomingEdges=N->getEdges();
+		for (auto E : OutcomingEdges) {
+			auto It=mPredecessorsMap.find(&E->getTargetNode());
+			if (It!=mPredecessorsMap.end())
+				It->second.insert(N);
+			else
+				mPredecessorsMap.insert({&E->getTargetNode(), {N}});
+		}
+	}
 }
 
 void SourceCFGBuilder::eliminateUnreached() {
