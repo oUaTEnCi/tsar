@@ -5,11 +5,12 @@
 //#include <clang/AST/Expr.h>
 //#include <clang/AST/Stmt.h>
 #include <clang/AST/Decl.h>
-//#include "tsar/Analysis/Clang/SourceCFG.h"
 #include "tsar/Support/PassGroupRegistry.h"
 #include "tsar/Core/Query.h"
 //
 #include <iostream>
+#include <llvm/Support/raw_ostream.h>
+#include <string>
 //
 
 
@@ -18,25 +19,54 @@ using namespace llvm;
 using namespace clang;
 using namespace std;
 
+template<typename KeyT, typename ValueT, typename Container>
+void addToMap(map<KeyT, Container> &Map, KeyT Key, ValueT Value) {
+    auto It=Map.find(Key);
+    if (It!=Map.end())
+        Map[Key].insert(Value);
+    else
+        Map.insert({Key, {Value}});
+}
+
+inline void PDGBuilder::processControlDependence() {
+    map<SourceCFGNode*, set<SourceCFGNode*>> DependenceInfo;
+    for (auto SourceNodeIt=++df_begin(getRealRoot()); SourceNodeIt!=df_end(getRealRoot()); ++SourceNodeIt)
+        for (auto TargetNodeIt=++df_begin(SourceNodeIt->getIDom()); TargetNodeIt!=df_end(SourceNodeIt->getIDom()); ++TargetNodeIt)
+            if (SourceNodeIt->getBlock()->hasEdgeTo(*TargetNodeIt->getBlock())
+                /*&& !( (SourceNodeIt->getBlock()->getKind()==SourceCFGNode::NodeKind::Service
+                && ((ServiceNode*)SourceNodeIt->getBlock())->getType()!=ServiceNode::NodeType::GraphEntry)
+                || (TargetNodeIt->getBlock()->getKind()==SourceCFGNode::NodeKind::Service
+                && ((ServiceNode*)TargetNodeIt->getBlock())->getType()!=ServiceNode::NodeType::GraphEntry) )*/)
+                for (unsigned I=TargetNodeIt.getPathLength()-1; I>0; --I)
+                    addToMap(DependenceInfo, SourceNodeIt->getBlock(), TargetNodeIt.getPath(I)->getBlock());
+    for (auto N : *mSCFG)
+        if (!(N->getKind()==SourceCFGNode::NodeKind::Service && ((ServiceNode*)N)->getType()!=ServiceNode::NodeType::GraphEntry))
+            mPDG->emplaceNode(N);
+    for (auto DIIt : DependenceInfo)
+        for (auto TargetNodeIt : DIIt.second) {
+            if (DIIt.first->getKind()==SourceCFGNode::NodeKind::Service
+                && ((ServiceNode*)DIIt.first)->getType()!=ServiceNode::NodeType::GraphEntry)
+                break;
+            if (!(TargetNodeIt->getKind()==SourceCFGNode::NodeKind::Service
+                && ((ServiceNode*)TargetNodeIt)->getType()!=ServiceNode::NodeType::GraphEntry))
+                mPDG->bindNodes(*mPDG->getNode(DIIt.first), *mPDG->getNode(TargetNodeIt), PDGEdge::EdgeKind::ControlDependence);
+        }
+}
+
 PDG *PDGBuilder::populate(SourceCFG &_SCFG) {
     //SourceCFG SCFG(_SCFG);
     ServiceNode *EntryNode;
     if (!_SCFG.getStopNode())
         return nullptr;
-    mPDG=new tsar::PDG(string(_SCFG.getName()));
+    mPDG=new tsar::PDG(string(_SCFG.getName()), &_SCFG);
     //
     mSCFG=&_SCFG;
-    //
-    EntryNode=&mSCFG->emplaceNode(ServiceNode::NodeType::GraphEntry);
-    mSCFG->bindNodes(*EntryNode, *mSCFG->getStartNode(), SourceCFGEdge::EdgeKind::True);
-    mSCFG->bindNodes(*EntryNode, *mSCFG->getStopNode(), SourceCFGEdge::EdgeKind::False);
+    mSCFG->emplaceEntryNode();
     mSCFG->recalculatePredMap();
-    //mPDG->SCFGPD=new PostDomTreeBase<SourceCFGNode>();
-    mPDG->SCFGDT=new DomTreeBase<SourceCFGNode>();
-    mPDG->SCFGDT->recalculate(*mSCFG);
-    //llvm::dumpDotGraphToFile(mPDG->SCFGPD, "post_dom_tree.dot", "Try 1");
-    //llvm::dumpDotGraphToFile(mPDG, "post_dom_tree.dot", "Try 1");
-    //llvm::dumpDotGraphToFile(mPDG->SCFGPD, "post_dom_tree.dot", "Try 1");
+    mSPDT=new PostDomTreeBase<SourceCFGNode>();
+    mSPDT->recalculate(*mSCFG);
+    dumpDotGraphToFile(mSPDT, "post-dom-tree.dot", "Try1");
+    processControlDependence();
     return mPDG;
 }
 
@@ -56,13 +86,12 @@ void PDGPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool PDGPass::runOnFunction(Function &F) {
-    releaseMemory();
+    //releaseMemory();
     auto &SCFGPass=getAnalysis<ClangSourceCFGPass>();
     mPDG=mPDGBuilder.populate(SCFGPass.getSourceCFG());
     return false;
 }
 
-/*
 namespace {
 struct PDGPassGraphTraits {
     static tsar::PDG *getGraph(PDGPass *P) { return &P->getPDG(); }
@@ -90,37 +119,7 @@ struct PDGViewer : public DOTGraphTraitsViewerWrapperPass<
 };
 char PDGViewer::ID = 0;
 } //anonymous namespace
-*/
 
-namespace {
-struct PDGPassGraphTraits {
-    static DomTreeBase<tsar::SourceCFGNode> *getGraph(PDGPass *P) { return &P->getDomTree(); }
-};
-
-struct PDGPrinter : public DOTGraphTraitsPrinterWrapperPass<
-    PDGPass, false, DomTreeBase<tsar::SourceCFGNode>*,
-    PDGPassGraphTraits> {
-    static char ID;
-    PDGPrinter() : DOTGraphTraitsPrinterWrapperPass<PDGPass, false,
-        DomTreeBase<tsar::SourceCFGNode>*, PDGPassGraphTraits>("dom_tree", ID) {
-        initializePDGPrinterPass(*PassRegistry::getPassRegistry());
-    }
-};
-char PDGPrinter::ID = 0;
-
-struct PDGViewer : public DOTGraphTraitsViewerWrapperPass<
-    PDGPass, false, DomTreeBase<tsar::SourceCFGNode>*,
-    PDGPassGraphTraits> {
-    static char ID;
-    PDGViewer() : DOTGraphTraitsViewerWrapperPass<PDGPass, false,
-        DomTreeBase<tsar::SourceCFGNode>*, PDGPassGraphTraits>("dom_tree", ID) {
-        initializePDGViewerPass(*PassRegistry::getPassRegistry());
-    }
-};
-char PDGViewer::ID = 0;
-} //anonymous namespace
-
-/*
 INITIALIZE_PASS_IN_GROUP(PDGViewer, "view-pdg",
     "View Program Dependency Graph", true, true,
     DefaultQueryManager::OutputPassGroup::getPassRegistry())
@@ -128,15 +127,10 @@ INITIALIZE_PASS_IN_GROUP(PDGViewer, "view-pdg",
 INITIALIZE_PASS_IN_GROUP(PDGPrinter, "print-pdg",
     "Print Program Dependency Graph", true, true,
     DefaultQueryManager::OutputPassGroup::getPassRegistry())
-*/
 
-INITIALIZE_PASS_IN_GROUP(PDGViewer, "view-dom-tree",
-    "View Program Dependency Graph", true, true,
-    DefaultQueryManager::OutputPassGroup::getPassRegistry())
-
-INITIALIZE_PASS_IN_GROUP(PDGPrinter, "print-dom-tree",
-    "Print Program Dependency Graph", true, true,
-    DefaultQueryManager::OutputPassGroup::getPassRegistry())
+/*INITIALIZE_PASS_IN_GROUP(PDTPrinter, "print-post-dom-tree",
+    "Print Post-Dominator Tree", true, true,
+    DefaultQueryManager::OutputPassGroup::getPassRegistry())*/
 
 FunctionPass *llvm::createPDGPrinter() {
   return new PDGPrinter;
@@ -145,3 +139,7 @@ FunctionPass *llvm::createPDGPrinter() {
 FunctionPass *llvm::createPDGViewer() {
   return new PDGViewer;
 }
+
+/*FunctionPass *llvm::createPDTPrinter() {
+  return new PDTPriter;
+}*/

@@ -19,6 +19,12 @@
 
 #include <map>		//For Inverse<SourceCFG>
 
+//
+//
+#include <iostream>
+//
+//
+
 namespace tsar {
 
 class SourceCFGNode;
@@ -216,6 +222,7 @@ public:
 	enum class NodeType {GraphStart, GraphStop, GraphEntry};
 	ServiceNode(NodeType _mType) : mType(_mType) {}
 	NodeKind getKind() const override { return NodeKind::Service; }
+	NodeType getType() const { return mType; }
 
 	explicit operator std::string() const override {
 		switch (mType) {
@@ -255,7 +262,8 @@ class SourceCFG : public SourceCFGBase {
 public:
 	SourceCFG(const std::string &_mFunctionName) : mFunctionName(_mFunctionName),
 		mStartNode(&emplaceNode(ServiceNode::NodeType::GraphStart)),
-		mStopNode(&emplaceNode(ServiceNode::NodeType::GraphStop)) {}
+		mStopNode(&emplaceNode(ServiceNode::NodeType::GraphStop)),
+		mEntryNode(nullptr) {}
 
 
 	inline bool addNode(SourceCFGNode &N) {
@@ -274,6 +282,14 @@ public:
 		return *CurrNode;
 	}
 
+	ServiceNode &emplaceEntryNode() {
+		mEntryNode=new ServiceNode(ServiceNode::NodeType::GraphEntry);
+		addNode(*mEntryNode);
+		bindNodes(*mEntryNode, *mStartNode, SourceCFGEdge::EdgeKind::True);
+		bindNodes(*mEntryNode, *mStopNode, SourceCFGEdge::EdgeKind::False);
+		return *mEntryNode;
+	}
+
 	inline void bindNodes(SourceCFGNode &SourceNode, SourceCFGNode &TargetNode,
 			SourceCFGEdge::EdgeKind _Ekind) {
 		connect(SourceNode, TargetNode, *(new SourceCFGEdge(TargetNode, _Ekind)));
@@ -281,6 +297,7 @@ public:
 
 	inline ServiceNode *getStartNode() const { return mStartNode; }
 	inline ServiceNode *getStopNode() const { return mStopNode; }
+	inline ServiceNode *getEntryNode() const { return mEntryNode?mEntryNode:mStartNode; }
 	inline llvm::StringRef getName() const { return mFunctionName; }
 	void mergeNodes(SourceCFGNode &AbsorbNode, SourceCFGNode &OutgoingNode);
 	void deleteNode(SourceCFGNode &_Node);
@@ -288,7 +305,7 @@ public:
 	DefaultNode *splitNode(DefaultNode &Node, int It);
 	void recalculatePredMap();
 
-	llvm::SmallPtrSetImpl<SourceCFGNode*> &getPredMap(SourceCFGNode *Node) {
+	std::set<SourceCFGNode*> &getPredMap(SourceCFGNode *Node) {
 		return mPredecessorsMap[Node];
 	}
 
@@ -323,9 +340,9 @@ public:
 		}
 	}
 private:
-	std::map<SourceCFGNode*, llvm::SmallPtrSet<SourceCFGNode*, 4>> mPredecessorsMap;
 	std::string mFunctionName;
-	ServiceNode *mStartNode, *mStopNode;
+	ServiceNode *mStartNode, *mStopNode, *mEntryNode;
+	std::map<SourceCFGNode*, std::set<SourceCFGNode*>> mPredecessorsMap;
 };
 
 class SourceCFGBuilder {
@@ -394,10 +411,11 @@ public:
 	bool runOnFunction(Function &F) override;
 	void getAnalysisUsage(AnalysisUsage &AU) const override;
 	void releaseMemory() {
-		mSCFGBuilder=tsar::SourceCFGBuilder();
+		//mSCFGBuilder=tsar::SourceCFGBuilder();
 		if (mSCFG) {
-			delete mSCFG;
-			mSCFG=nullptr;
+			//delete mSCFG;
+			//mSCFG=nullptr;
+			;
 		}
 	}
 	inline tsar::SourceCFG &getSourceCFG() { return *mSCFG; }
@@ -405,19 +423,6 @@ private:
 	tsar::SourceCFGBuilder mSCFGBuilder;
 	tsar::SourceCFG *mSCFG;
 };
-
-/*
-template<> struct Inverse<tsar::SourceCFGNode*> {
-	using PredStorageType=llvm::SmallPtrSet<tsar::SourceCFGNode*, 4>;
-	tsar::SourceCFGNode *Node;
-	PredStorageType Predecessors;
-	Inverse(tsar::SourceCFGNode *_Node) : Node(_Node) {
-		for (auto N : *Node->getParent())
-			if (N->hasEdgeTo(*Node))
-				Predecessors.insert(N);
-	}
-};
-*/
 
 template<> struct GraphTraits<tsar::SourceCFGNode*> {
 	using NodeRef=tsar::SourceCFGNode*;
@@ -444,7 +449,7 @@ template<> struct GraphTraits<tsar::SourceCFG*> :
 		public GraphTraits<tsar::SourceCFGNode*> {
 	using nodes_iterator=tsar::SourceCFG::iterator;
 	static NodeRef getEntryNode(tsar::SourceCFG *mSCFG) {
-		return mSCFG->getStartNode();
+		return mSCFG->getEntryNode();
 	}
 	static nodes_iterator nodes_begin(tsar::SourceCFG *mSCFG) {
 		return mSCFG->begin();
@@ -481,7 +486,7 @@ template<> struct GraphTraits<const tsar::SourceCFG*> :
 		public GraphTraits<const tsar::SourceCFGNode*> {
 	using nodes_iterator=tsar::SourceCFG::const_iterator;
 	static NodeRef getEntryNode(const tsar::SourceCFG *mSCFG) {
-		return mSCFG->getStartNode();
+		return mSCFG->getEntryNode();
 	}
 	static nodes_iterator nodes_begin(const tsar::SourceCFG *mSCFG) {
 		return mSCFG->begin();
@@ -494,38 +499,42 @@ template<> struct GraphTraits<const tsar::SourceCFG*> :
 	static unsigned size(const tsar::SourceCFG *mSCFG) { return mSCFG->size(); }
 };
 
-/*
 template<> struct GraphTraits<Inverse<tsar::SourceCFGNode*>> {
 	using NodeRef=tsar::SourceCFGNode*;
-	using ChildIteratorType=Inverse<tsar::SourceCFGNode*>::
-		PredStorageType::iterator;
-	static ChildIteratorType child_begin(NodeRef N) {
-		return Inverse(N).Predecessors.begin();
-	}
-	static ChildIteratorType child_end(NodeRef N) {
-		return Inverse(N).Predecessors.end();
-	}
-};
-*/
-
-template<> struct GraphTraits<Inverse<tsar::SourceCFGNode*>> {
-	using NodeRef=tsar::SourceCFGNode*;
-	using ChildIteratorType=SmallPtrSetImpl<tsar::SourceCFGNode*>::iterator;
+	using ChildIteratorType=std::set<tsar::SourceCFGNode*>::iterator;
 	static ChildIteratorType child_begin(NodeRef N) {
 		return N->getParent()->getPredMap(N).begin();
 	}
 	static ChildIteratorType child_end(NodeRef N) {
 		return N->getParent()->getPredMap(N).end();
 	}
+	static NodeRef getEntryNode(NodeRef N) { return N; }	
+};
+
+template<> struct GraphTraits<Inverse<tsar::SourceCFG*>> :
+		public GraphTraits<Inverse<tsar::SourceCFGNode*>> {
+	using nodes_iterator=tsar::SourceCFG::iterator;
+	static NodeRef getEntryNode(tsar::SourceCFG *SCFG) {
+		return SCFG->getEntryNode();
+	}
+	static nodes_iterator nodes_begin(Inverse<tsar::SourceCFG*> *ISCFG) {
+		return ISCFG->Graph->begin();
+	}
+	static nodes_iterator nodes_end(Inverse<tsar::SourceCFG*> *ISCFG) {
+		return ISCFG->Graph->end();
+	}
+	unsigned size(Inverse<tsar::SourceCFG*> *ISCFG) {
+		return ISCFG->Graph->size();
+	}
 };
 
 template<> struct DOTGraphTraits<tsar::SourceCFG*> :
 		public DefaultDOTGraphTraits {
 	DOTGraphTraits(bool IsSimple=false) : DefaultDOTGraphTraits(IsSimple) {}
-	static std::string getGraphName(const tsar::SourceCFG *mSCFG) {
-		return "mSCFG";
+	static std::string getGraphName(const tsar::SourceCFG *SCFG) {
+		return "Source Control Flow Graph";
 	}
-	std::string getNodeLabel(tsar::SourceCFGNode *Node, tsar::SourceCFG *mSCFG) {
+	std::string getNodeLabel(tsar::SourceCFGNode *Node, tsar::SourceCFG *SCFG) {
 		return (std::string)*Node;
 	}
 	std::string getEdgeSourceLabel(tsar::SourceCFGNode *Node,

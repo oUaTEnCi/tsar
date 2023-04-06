@@ -14,6 +14,8 @@
 
 //
 #include <llvm/ADT/DepthFirstIterator.h>
+#include <iostream>
+//#include <llvm/Support/GraphWriter.h>
 //
 
 namespace tsar {
@@ -31,13 +33,6 @@ public:
     enum class EdgeKind {ControlDependence, DataDependence};
     PDGEdge(PDGNode &_TargetNode, EdgeKind _Kind) : PDGEdgeBase(_TargetNode), Kind(_Kind) {}
     inline EdgeKind getKind() const { return Kind; }
-    explicit operator std::string() const {
-        switch (Kind) {
-            case EdgeKind::ControlDependence:
-            case EdgeKind::DataDependence:
-                return "";
-        }
-    }
 private:
     EdgeKind Kind;
 };
@@ -45,26 +40,53 @@ private:
 class PDGNode : public PDGNodeBase {
 public:
     enum class NodeKind {Default, Region};
-    PDGNode(SourceBasicBlock *_SBB, const NodeKind _Kind) : SBB(_SBB), Kind(_Kind) {}
-    PDGNode(const PDGNode &_Node) : PDGNodeBase(_Node), SBB(_Node.SBB), Kind(_Node.Kind) {}
-    inline NodeKind getKind() const { return Kind; }
-    explicit operator std::string() const {
-        switch (Kind) {
-            case NodeKind::Default:
-                return "START"+(std::string)*SBB;
-            case NodeKind::Region:
-                return "REGION";
-        }
-    }
+    PDGNode(SourceCFGNode *_mBlock) : mBlock(_mBlock), mKind(NodeKind::Default) {}
+    //PDGNode(const PDGNode &_Node) : PDGNodeBase(_Node), SBB(_Node.SBB), Kind(_Node.Kind) {}
+    inline NodeKind getKind() const { return mKind; }
+    SourceCFGNode *getBlock() const { return mBlock; }
 private:
-    SourceBasicBlock *SBB;
-    NodeKind Kind;
+    //SourceBasicBlock *SBB;
+    SourceCFGNode *mBlock;
+    NodeKind mKind;
 };
 
 class PDG : public PDGBase {
     friend class PDGBuilder;
 public:
-    PDG(const std::string &_FunctionName) : FunctionName(_FunctionName), EntryNode(nullptr) {}
+    PDG(const std::string &_FunctionName, SourceCFG *_mSCFG) : FunctionName(_FunctionName), mSCFG(_mSCFG) {}
+
+    inline bool addNode(PDGNode &N) {
+        if (PDGBase::addNode(N)) {
+            //
+            std::cout<<"YES!\n";
+            //
+            BlockToNodeMap.insert({N.getBlock(), &N});
+            return true;
+        }
+        else
+            return false;
+	}
+
+    PDGNode &emplaceNode(SourceCFGNode *Block) {
+        PDGNode *NewNode=new PDGNode(Block);
+        addNode(*NewNode);
+        return *NewNode;
+    }
+
+    inline void bindNodes(PDGNode &SourceNode, PDGNode &TargetNode, PDGEdge::EdgeKind _Ekind) {
+        connect(SourceNode, TargetNode, *(new PDGEdge(TargetNode, _Ekind)));
+    }
+
+    inline PDGNode *getNode(SourceCFGNode *Block) {
+        //return nullptr;
+        //assert(BlockToNodeMap.find(Block)!=BlockToNodeMap.end());
+        return BlockToNodeMap[Block];
+    }
+
+    inline PDGNode *getEntryNode() {
+        return getNode(mSCFG->getEntryNode());
+    }
+
     ~PDG() {
         for (auto N : Nodes) {
             for (auto E : N->getEdges())
@@ -72,30 +94,24 @@ public:
             delete N;
         }
     }
-    inline PDGNode *getEntryNode() { return EntryNode; }
-    inline void bindNodes(PDGNode &SourceNode, PDGNode &TargetNode, PDGEdge::EdgeKind _Ekind) {
-        connect(SourceNode, TargetNode, *(new PDGEdge(TargetNode, _Ekind)));
-    }
-    //
-    inline llvm::DomTreeBase<SourceCFGNode> *getDomTree() { return SCFGPD; }
-    //
 private:
-    //llvm::PostDomTreeBase<SourceCFGNode> *SCFGPD;
-    llvm::DomTreeBase<SourceCFGNode> *SCFGPD;
     std::string FunctionName;
-    PDGNode *EntryNode;
+    std::map<SourceCFGNode*, PDGNode*> BlockToNodeMap;
+    SourceCFG *mSCFG;
 };
 
 class PDGBuilder {
 public:
     PDGBuilder() : mPDG(nullptr) {}
-    //PDG *populate(const SourceCFG &_SCFG);
     PDG *populate(SourceCFG &_SCFG);
 private:
+    inline void processControlDependence();
+    inline llvm::DomTreeNodeBase<SourceCFGNode> *getRealRoot() {
+        return *mSPDT->getRootNode()->begin();
+    }
     PDG *mPDG;
-    //
     SourceCFG *mSCFG;
-    //
+    llvm::PostDomTreeBase<SourceCFGNode> *mSPDT;
 };
 
 }//namespace tsar
@@ -118,50 +134,13 @@ public:
             ;
         }
     }
-    //inline tsar::PDG &getPDG() { return *mPDG; }
-    inline DomTreeBase<tsar::SourceCFGNode> &getDomTree() { return *mPDG->getDomTree(); }
+    inline tsar::PDG &getPDG() { return *mPDG; }
+    //inline DomTreeBase<tsar::SourceCFGNode> &getDomTree() { return *mPDG->getDomTree(); }
+    //inline PostDomTreeBase<tsar::SourceCFGNode> &getPostDomTree() { return *mPDG->getPostDomTree(); }
 private:
     tsar::PDGBuilder mPDGBuilder;
     tsar::PDG *mPDG;
 };
-
-/*
-template<> struct GraphTraits<tsar::SourceCFGNode*> {
-	using NodeRef=tsar::SourceCFGNode*;
-	static tsar::SourceCFGNode *SCFGGetTargetNode(tsar::SourceCFGEdge *E) {
-		return &E->getTargetNode();
-	}
-	using ChildIteratorType=mapped_iterator<tsar::SourceCFGNode::iterator, decltype(&SCFGGetTargetNode)>;
-	using ChildEdgeIteratorType=tsar::SourceCFGNode::iterator;
-	static NodeRef getEntryNode(NodeRef N) { return N; }
-	static ChildIteratorType child_begin(NodeRef N) {
-		return ChildIteratorType(N->begin(), &SCFGGetTargetNode);
-	}
-	static ChildIteratorType child_end(NodeRef N) {
-		return ChildIteratorType(N->end(), &SCFGGetTargetNode);
-	}
-	static ChildEdgeIteratorType child_edge_begin(NodeRef N) {
-		return N->begin();
-	}
-	static ChildEdgeIteratorType child_edge_end(NodeRef N) { return N->end(); }
-};
-
-template<> struct GraphTraits<tsar::SourceCFG*> : public GraphTraits<tsar::SourceCFGNode*> {
-	using nodes_iterator=tsar::SourceCFG::iterator;
-	static NodeRef getEntryNode(tsar::SourceCFG *mSCFG) {
-		return mSCFG->getStartNode();
-	}
-	static nodes_iterator nodes_begin(tsar::SourceCFG *mSCFG) {
-		return mSCFG->begin();
-	}
-	static nodes_iterator nodes_end(tsar::SourceCFG *mSCFG) {
-		return mSCFG->end();
-	}
-	using EdgeRef=tsar::SourceCFGEdge*;
-	static NodeRef edge_dest(EdgeRef E) { return &E->getTargetNode(); }
-	static unsigned size(tsar::SourceCFG *mSCFG) { return mSCFG->size(); }
-};
-*/
 
 //Не мусор
 template<> struct GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
@@ -176,26 +155,91 @@ template<> struct GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
     }
 };
 
-template<> struct GraphTraits<DomTreeBase<tsar::SourceCFGNode>*> : public GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
-    static NodeRef getEntryNode(DomTreeBase<tsar::SourceCFGNode> *Tree) { return Tree->getRootNode(); }
-
-    using nodes_iterator=df_iterator<DomTreeBase<tsar::SourceCFGNode>*>;
-    static nodes_iterator nodes_begin(DomTreeBase<tsar::SourceCFGNode> *Tree) { return df_begin(Tree); }
-    static nodes_iterator nodes_end(DomTreeBase<tsar::SourceCFGNode> *Tree) { return df_end(Tree); }
-    static unsigned size(DomTreeBase<tsar::SourceCFGNode> *Tree) { return Tree->root_size(); }
-};
-
-template<> struct DOTGraphTraits<DomTreeBase<tsar::SourceCFGNode>*> : public DefaultDOTGraphTraits {
-    DOTGraphTraits(bool IsSimple=false) : DefaultDOTGraphTraits(IsSimple) {}
-    static std::string getGraphName(const DomTreeBase<tsar::SourceCFGNode> *Tree) { return "Dom_Tree"; }
-    std::string getNodeLabel(DomTreeNodeBase<tsar::SourceCFGNode> *Node,
-            DomTreeBase<tsar::SourceCFGNode> *Tree) {
-        return (std::string)*Node->getBlock();
+template<bool IsPostDom> struct GraphTraits<DominatorTreeBase<tsar::SourceCFGNode, IsPostDom>*> :
+        public GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
+    static NodeRef getEntryNode(DominatorTreeBase<tsar::SourceCFGNode,
+            IsPostDom> *Tree) {
+        return Tree->getRootNode();
+    }
+    using nodes_iterator=df_iterator<DomTreeNodeBase<tsar::SourceCFGNode>*>;
+    static nodes_iterator nodes_begin(DominatorTreeBase<tsar::SourceCFGNode,
+            IsPostDom> *Tree) {
+        return df_begin(Tree->getRootNode());
+    }
+    static nodes_iterator nodes_end(DominatorTreeBase<tsar::SourceCFGNode,
+            IsPostDom> *Tree) {
+        return df_end(Tree->getRootNode());
+    }
+    static unsigned size(DominatorTreeBase<tsar::SourceCFGNode, IsPostDom> *Tree) {
+        return Tree->root_size();
     }
 };
-//
 
+template<bool IsPostDom> struct DOTGraphTraits<DominatorTreeBase<
+        tsar::SourceCFGNode, IsPostDom>*> : public DefaultDOTGraphTraits {
+    DOTGraphTraits(bool IsSimple=false) : DefaultDOTGraphTraits(IsSimple) {}
+    static std::string getGraphName(const DominatorTreeBase<tsar::SourceCFGNode,
+            IsPostDom> *Tree) {
+        return IsPostDom?"Post-Dominator Tree":"Dominator Tree";
+    }
+    std::string getNodeLabel(DomTreeNodeBase<tsar::SourceCFGNode> *Node,
+            DominatorTreeBase<tsar::SourceCFGNode, IsPostDom> *Tree) {
+        return (std::string)*Node->getBlock();
+    }
+    static bool isNodeHidden(DomTreeNodeBase<tsar::SourceCFGNode> *Node,
+            DominatorTreeBase<tsar::SourceCFGNode, IsPostDom> *Tree) {
+        Tree->isVirtualRoot(Node)?true:false;
+    }
+};
 
+template<> struct GraphTraits<tsar::PDGNode*> {
+    using NodeRef=tsar::PDGNode*;
+	static tsar::PDGNode *PDGGetTargetNode(tsar::PDGEdge *E) {
+		return &E->getTargetNode();
+	}
+	using ChildIteratorType=mapped_iterator<tsar::PDGNode::iterator,
+			decltype(&PDGGetTargetNode)>;
+	using ChildEdgeIteratorType=tsar::PDGNode::iterator;
+	static NodeRef getEntryNode(NodeRef N) { return N; }
+	static ChildIteratorType child_begin(NodeRef N) {
+		return ChildIteratorType(N->begin(), &PDGGetTargetNode);
+	}
+	static ChildIteratorType child_end(NodeRef N) {
+		return ChildIteratorType(N->end(), &PDGGetTargetNode);
+	}
+	static ChildEdgeIteratorType child_edge_begin(NodeRef N) {
+		return N->begin();
+	}
+	static ChildEdgeIteratorType child_edge_end(NodeRef N) { return N->end(); }
+};
+
+template<> struct GraphTraits<tsar::PDG*> :
+        public GraphTraits<tsar::PDGNode*> {
+	using nodes_iterator=tsar::PDG::iterator;
+	static NodeRef getEntryNode(tsar::PDG *Graph) {
+		return Graph->getEntryNode();
+	}
+	static nodes_iterator nodes_begin(tsar::PDG *Graph) {
+		return Graph->begin();
+	}
+	static nodes_iterator nodes_end(tsar::PDG *Graph) {
+		return Graph->end();
+	}
+	using EdgeRef=tsar::PDGEdge*;
+	static NodeRef edge_dest(EdgeRef E) { return &E->getTargetNode(); }
+	static unsigned size(tsar::PDG *Graph) { return Graph->size(); }
+};
+
+template<> struct DOTGraphTraits<tsar::PDG*> : public DefaultDOTGraphTraits {
+    DOTGraphTraits(bool IsSimple=false) : DefaultDOTGraphTraits(IsSimple) {}
+    static std::string getGraphName(const tsar::PDG *Graph) {
+        return "Control Dependence Graph";
+    }
+    std::string getNodeLabel(const tsar::PDGNode *Node, const tsar::PDG *Graph) {
+        return (std::string)*Node->getBlock();
+        //return "";
+    }
+};
 
 }//namespace llvm
 

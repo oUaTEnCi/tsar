@@ -337,6 +337,13 @@ void SourceCFG::recalculatePredMap() {
 				mPredecessorsMap.insert({&E->getTargetNode(), {N}});
 		}
 	}
+	/*for (auto N : Nodes)
+		mPredecessorsMap.insert({N, {}});
+	for (auto N : Nodes) {
+		auto OutcomingEdges=N->getEdges();
+		for (auto E : OutcomingEdges)
+			mPredecessorsMap[&E->getTargetNode()].insert(N);
+	}*/
 }
 
 void SourceCFGBuilder::eliminateUnreached() {
