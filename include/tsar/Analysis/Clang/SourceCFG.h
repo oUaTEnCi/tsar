@@ -3,21 +3,28 @@
 
 #include "tsar/Analysis/Clang/Passes.h"
 #include <bcl/utility.h>
+
+#include <clang/AST/ASTTypeTraits.h>
+#include <clang/Basic/LangOptions.h>
+#include <clang/AST/PrettyPrinter.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/Stmt.h>
 #include <clang/AST/Decl.h>
+
 #include <llvm/ADT/DirectedGraph.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/GraphTraits.h>
-#include <llvm/Support/DOTGraphTraits.h>
 #include <llvm/Pass.h>
 #include <llvm/Analysis/DOTGraphTraitsPass.h>
+#include <llvm/Support/DOTGraphTraits.h>
 #include <llvm/Support/GraphWriter.h>
-#include <iomanip>
+#include <llvm/Support/Casting.h>
 
+#include <iomanip>
 #include <map>		//For Inverse<SourceCFG>
+
 
 //
 //
@@ -35,166 +42,182 @@ using SourceCFGNodeBase=llvm::DGNode<SourceCFGNode, SourceCFGEdge>;
 using SourceCFGEdgeBase=llvm::DGEdge<SourceCFGNode, SourceCFGEdge>;
 using SourceCFGBase=llvm::DirectedGraph<SourceCFGNode, SourceCFGEdge>;
 using StmtStringType=std::string;
+class ReferenceNodeOp;
+class NativeNodeOp;
 
-struct Op {
-	union {
-		clang::Stmt *S;
-		clang::VarDecl *VD;
-	};
-	bool IsStmt;
-	Op(clang::VarDecl *_VD) : VD(_VD), IsStmt(false) {}
-	Op(clang::Stmt *_S) : S(_S), IsStmt(true) {}
-};
+class NodeOp {
+	friend class ReferenceNodeOp;
+	friend class NativeNodeOp;
+	friend class SourceCFGBuilder;
+public:
+	enum class NodeOpKind {Native, Wrapper, Reference};
+	NodeOp(NodeOpKind _mKind) : mKind(_mKind), mIsReferred(false) {}
+	NodeOp(const NodeOp &_N) = default;
+	NodeOpKind getKind() const { return mKind; };
+	void print(StmtStringType &ResStr) const;
+	std::string getOpAddr() const;
 
-enum NodeOpTypes {NativeNode, WrapperNode, ReferenceNode};
-
-struct NodeOp {
-	bool isReferred;
-	NodeOp() : isReferred(false) {}
-	NodeOp(const NodeOp &_N) : isReferred(_N.isReferred) {}
-	virtual void print(StmtStringType &) = 0;
-	virtual NodeOpTypes getType() = 0;
-	virtual std::string getOpAddr() = 0;
-	void printRefDecl(StmtStringType &ResStr) {
-		if (isReferred) {
+	void printRefDecl(StmtStringType &ResStr) const {
+		if (mIsReferred) {
 			ResStr+="<ref_decl_"+getOpAddr();
-			switch (getType()) {
-				case NativeNode:
+			switch (mKind) {
+				case NodeOpKind::Native:
 					ResStr+="_NATIVE_> - ";
 					break;
-				case WrapperNode:
+				case NodeOpKind::Wrapper:
 					ResStr+="_WRAPPER_> - ";
 					break;
-				case ReferenceNode:
+				case NodeOpKind::Reference:
 					ResStr+="_REFERENCE_> - ";
 					break;
 			}
 		}
 	}
-	inline void printASTNode(StmtStringType &ResStr, tsar::Op O);
-	inline void printASTVarDeclNode(StmtStringType &ResStr, clang::VarDecl *VD);
-	void printASTStmtNode(StmtStringType &ResStr, clang::Stmt *S);
+	~NodeOp() = default;
+	void destroy();
+private:
+	NodeOpKind mKind;
+	bool mIsReferred;
 };
 
-struct WrapperNodeOp : NodeOp {
-	Op O;
-	std::vector<NodeOp*> Leaves;
-	WrapperNodeOp(tsar::Op _O) : O(_O) {}
-	void print(StmtStringType &ResStr) override;
-	NodeOpTypes getType() override { return WrapperNode; }
-	std::string getOpAddr() override {
-		return "0x"+(std::stringstream()<<std::hex<<(long unsigned)O.S).str();
+class WrapperNodeOp : public NodeOp {
+	friend class SourceCFGBuilder;
+	friend class NativeNodeOp;
+public:
+	WrapperNodeOp(const clang::Stmt *_Op) : NodeOp(NodeOpKind::Wrapper), Op(clang::DynTypedNode::create(*_Op)) {}
+	WrapperNodeOp(const clang::VarDecl *_Op) : NodeOp(NodeOpKind::Wrapper), Op(clang::DynTypedNode::create(*_Op)) {}
+	void print(StmtStringType &ResStr) const;
+	static bool classof(const NodeOp *Node) { return Node->getKind()==NodeOpKind::Wrapper; }
+
+	std::string getOpAddr() const {
+		return "0x"+(std::stringstream()<<std::hex<<(long unsigned)&Op.getUnchecked<clang::Stmt>()).str();
 	}
+
 	~WrapperNodeOp() {
 		for (auto L : Leaves)
-			if (L)
-				delete L;
-	}
-};
-
-struct NativeNodeOp : NodeOp {
-	Op O;
-	NativeNodeOp(tsar::Op _O) : O(_O) {}
-	NativeNodeOp(const WrapperNodeOp &WNO) : NodeOp(WNO), O(WNO.O) {}
-	void print(StmtStringType &ResStr) override {
-		printRefDecl(ResStr);
-		printASTNode(ResStr, O.S);
-	}
-	NodeOpTypes getType() override { return NativeNode; }
-	std::string getOpAddr() override {
-		return "0x"+(std::stringstream()<<std::hex<<(long unsigned)O.S).str();
-	}
-};
-
-struct ReferenceNodeOp : NodeOp {
-	NodeOp *Referred;
-	std::string ReferenceName;
-	ReferenceNodeOp(NodeOp *_Referred, std::string _ReferenceName)
-		: Referred(_Referred), ReferenceName(_ReferenceName) {
-		Referred->isReferred=true;
-	}
-	void print(StmtStringType &ResStr) override {
-		ResStr+="<"+ReferenceName+Referred->getOpAddr()+"_REFERRENCE_>";
-	}
-	NodeOpTypes getType() override { return ReferenceNode; }
-	std::string getOpAddr() override {
-		return "0x"+(std::stringstream()<<std::hex<<(long unsigned)this).str();
-	}
-};
-
-class ServiceNode;
-class DefaultNode;
-
-class SourceBasicBlock {
-	friend class DefaultNode;
-public:
-	using OpStorageType=std::vector<NodeOp*>;
-	using iterator=OpStorageType::iterator;
-	SourceBasicBlock() = default;
-	SourceBasicBlock(NodeOp *_Op) : mOps(1, _Op) {}
-	SourceBasicBlock(std::initializer_list<NodeOp*> _Ops) : mOps(_Ops) {}
-	SourceBasicBlock(const llvm::SmallVectorImpl<NodeOp*> &_Ops)
-			: mOps(_Ops.begin(), _Ops.end()) {}
-	SourceBasicBlock(const SourceBasicBlock &_SBB) = delete;
-	SourceBasicBlock(SourceBasicBlock &&_SBB) = delete;
-	SourceBasicBlock &operator=(const SourceBasicBlock &_SBB) = delete;
-	SourceBasicBlock &operator=(SourceBasicBlock &&_SBB) = delete;
-	iterator begin() { return mOps.begin(); }
-	iterator end() { return mOps.end(); }
-	std::size_t size() const { return mOps.size(); }
-	NodeOp &operator[](int Index) { return *mOps[Index]; }
-
-	void clear() {
-		for (auto O : mOps)
-			delete O;
-		mOps.clear();
-	}
-	
-	explicit operator std::string() const;
-	void decrease(int NewSize) {
-		mOps.resize(NewSize);
+			L->destroy();
 	}
 private:
-	iterator addOp(NodeOp *_Op) { mOps.push_back(_Op); return mOps.end()-1; }
+	clang::DynTypedNode Op;
+	std::vector<NodeOp*> Leaves;
+};
 
-	template<typename It>
-	iterator addOp(It begin, It end) {
-		for (auto I=begin; I!=end; ++I) mOps.push_back(*I); return mOps.end()-1;
+class NativeNodeOp : public NodeOp {
+	friend class SourceCFGBuilder;
+public:
+	NativeNodeOp(clang::Stmt *_Op) : NodeOp(NodeOpKind::Native), Op(clang::DynTypedNode::create(*_Op)) {}
+	NativeNodeOp(clang::VarDecl *_Op) : NodeOp(NodeOpKind::Native), Op(clang::DynTypedNode::create(*_Op)) {}
+	NativeNodeOp(const WrapperNodeOp &WNO) : NodeOp(WNO), Op(WNO.Op) { mKind=NodeOpKind::Native; }
+	static bool classof(const NodeOp *Node) {
+		return Node->getKind()==NodeOpKind::Native;
 	}
 
-	OpStorageType mOps;
+	void print(StmtStringType &ResStr) const {
+		llvm::raw_string_ostream StrStream(ResStr);
+		printRefDecl(ResStr);
+		if (Op.get<clang::Stmt>()) {
+			Op.getUnchecked<clang::Stmt>().printPretty(StrStream, nullptr, clang::PrintingPolicy(clang::LangOptions()));
+		}
+		else
+			Op.getUnchecked<clang::VarDecl>().print(StrStream);
+	}
+
+	std::string getOpAddr() const {
+		return "0x"+(std::stringstream()<<std::hex<<(long unsigned)&Op.getUnchecked<clang::Stmt>()).str();
+	}
+	~NativeNodeOp() = default;
+private:
+	clang::DynTypedNode Op;
+};
+
+class ReferenceNodeOp : public NodeOp {
+	friend class SourceCFGBuilder;
+public:
+	ReferenceNodeOp(NodeOp *_mReferredNode, std::string _mReferenceName)
+		: NodeOp(NodeOpKind::Reference), mReferredNode(_mReferredNode), mReferenceName(_mReferenceName) {
+		mReferredNode->mIsReferred=true;
+	}
+	static bool classof(const NodeOp *Node) { return Node->getKind()==NodeOpKind::Reference; }
+	void print(StmtStringType &ResStr) const {
+		ResStr+="<"+mReferenceName+mReferredNode->getOpAddr()+"_REFERRENCE_>";
+	}
+	std::string getOpAddr() const {
+		return "0x"+(std::stringstream()<<std::hex<<(long unsigned)this).str();
+	}
+	~ReferenceNodeOp() = default;
+private:
+	NodeOp *mReferredNode;
+	std::string mReferenceName;
 };
 
 class SourceCFGEdge : public SourceCFGEdgeBase {
 public:
-	enum class EdgeKind {Default, True, False, Continue, Break, ToCase};
+	enum class EdgeKind {Default, Labeled};
 	SourceCFGEdge(SourceCFGNode &_TargetNode, EdgeKind _Kind)
 			: SourceCFGEdgeBase(_TargetNode), mKind(_Kind) {}
-	SourceCFGEdge(const SourceCFGEdge &_Edge)
-			: SourceCFGEdgeBase(_Edge), mKind(_Edge.mKind) {}
-	SourceCFGEdge(SourceCFGEdge &&_Edge)
-			: SourceCFGEdgeBase(std::move(_Edge)), mKind(_Edge.mKind) {}
-	SourceCFGEdge &operator=(const SourceCFGEdge &_Edge) = default;
+	//SourceCFGEdge(const SourceCFGEdge &_Edge)
+	//		: SourceCFGEdgeBase(_Edge), mKind(_Edge.mKind) {}
+	//SourceCFGEdge(SourceCFGEdge &&_Edge)
+	//		: SourceCFGEdgeBase(std::move(_Edge)), mKind(_Edge.mKind) {}
+	//SourceCFGEdge &operator=(const SourceCFGEdge &_Edge) = default;
 	EdgeKind getKind() const { return mKind; }
-	explicit operator std::string() const {
-		switch (mKind) {
-			case EdgeKind::True:
-				return "T";
-			case EdgeKind::False:
-				return "F";
-			case EdgeKind::Default:
-			default:
-				return "";
-		}
-	}
+
+	explicit operator std::string() const;
+	void destroy();
+	~SourceCFGEdge() = default;
 private:
 	EdgeKind mKind;
+};
+
+class DefaultEdge : public SourceCFGEdge {
+public:
+	enum class EdgeType {Default, True, False, ImplicitDefault};
+	DefaultEdge(SourceCFGNode &_TargetNode, EdgeType _mType) : SourceCFGEdge(_TargetNode, EdgeKind::Default), mType(_mType) {}
+
+	explicit operator std::string() const {
+		switch (mType) {
+			case EdgeType::Default:
+				return "";
+			case EdgeType::True:
+				return "T";
+			case EdgeType::False:
+				return "F";
+			case EdgeType::ImplicitDefault:
+				return "default";
+		}
+	}
+
+	~DefaultEdge() = default;
+private:
+	EdgeType mType;
+};
+
+class LabeledEdge : public SourceCFGEdge {
+public:
+	LabeledEdge(SourceCFGNode &_TargetNode, clang::SwitchCase *_mLabel)
+			: SourceCFGEdge(_TargetNode, EdgeKind::Labeled), mLabel(_mLabel) {}
+	
+	explicit operator std::string() const {
+		std::string ResStr;
+		llvm::raw_string_ostream StrStream(ResStr);
+		if (llvm::isa<clang::DefaultStmt>(*mLabel))
+			ResStr="default";
+		else
+			((clang::CaseStmt*)mLabel)->getLHS()->printPretty(StrStream, nullptr, clang::PrintingPolicy(clang::LangOptions()));
+		return ResStr;
+	}
+
+	~LabeledEdge() = default;
+private:
+	clang::SwitchCase *mLabel;
 };
 
 class SourceCFGNode : public SourceCFGNodeBase {
 	friend class SourceCFG;
 public:
 	enum class NodeKind {Default, Service};
+	SourceCFGNode(NodeKind _mKind) : mKind(_mKind) {}
+	NodeKind getKind() const { return mKind; }
 
 	inline SourceCFGEdge *addNewEdge(SourceCFGNode &TargetNode,
 			SourceCFGEdge::EdgeKind Ekind) {
@@ -209,22 +232,22 @@ public:
 
 	void merge(SourceCFGNode &NodeToAttach);
 	SourceCFG *getParent() { return OwningGraph; }
-	virtual NodeKind getKind() const = 0;
-	virtual explicit operator std::string() const = 0;
+	explicit operator std::string() const;
 	void printAsOperand(llvm::raw_ostream &OS, bool B) { OS<<operator std::string(); }
-	virtual ~SourceCFGNode() = default;
+	~SourceCFGNode() = default;
+	void destroy();
 private:
+	NodeKind mKind;
 	SourceCFG *OwningGraph;
 };
 
 class ServiceNode : public SourceCFGNode {
 public:
 	enum class NodeType {GraphStart, GraphStop, GraphEntry};
-	ServiceNode(NodeType _mType) : mType(_mType) {}
-	NodeKind getKind() const override { return NodeKind::Service; }
+	ServiceNode(NodeType _mType) : SourceCFGNode(NodeKind::Service), mType(_mType) {}
 	NodeType getType() const { return mType; }
-
-	explicit operator std::string() const override {
+	static bool classof(const SourceCFGNode *Node) { return Node->getKind()==NodeKind::Service; }
+	explicit operator std::string() const {
 		switch (mType) {
 			case NodeType::GraphStart:
 				return "START";
@@ -242,20 +265,32 @@ class DefaultNode : public SourceCFGNode {
 	friend class SourceCFG;
 	friend class SourceCFGBuilder;
 public:
-	DefaultNode() = default;
-	std::size_t size() { return SBB.size(); }
-	NodeOp &operator[](int Index) { return SBB[Index]; }
-	NodeKind getKind() const override { return NodeKind::Default; }
-	explicit operator std::string() const override { return (std::string)SBB; }
-private:
-	inline SourceBasicBlock::iterator addOp(NodeOp *_Op) { return SBB.addOp(_Op); }
+	using OpStorageType=std::vector<NodeOp*>;
+	DefaultNode() : SourceCFGNode(NodeKind::Default) {}
+	std::size_t size() const { return mBlock.size(); }
+	static bool classof(const SourceCFGNode *Node) { return Node->getKind()==NodeKind::Default; }
+	NodeOp &operator[](int Index) { return *mBlock[Index]; }
+	explicit operator std::string() const;
 
-	template<typename It>
-	SourceBasicBlock::iterator addOp(It begin, It end) {
-		return SBB.addOp(begin, end);
+	void clearBlock() {
+		for (auto Op : mBlock)
+			Op->destroy();
+		mBlock.clear();
 	}
 
-	SourceBasicBlock SBB;
+	~DefaultNode() {
+		clearBlock();
+	}
+
+private:
+	inline OpStorageType::iterator addOp(NodeOp *_Op) { mBlock.push_back(_Op); return mBlock.end()-1; }
+
+	template<typename It>
+	OpStorageType::iterator addOp(It begin, It end) {
+		for (auto I=begin; I!=end; ++I) mBlock.push_back(*I); return mBlock.end()-1;
+	}
+
+	OpStorageType mBlock;
 };
 
 class SourceCFG : public SourceCFGBase {
@@ -285,14 +320,23 @@ public:
 	ServiceNode &emplaceEntryNode() {
 		mEntryNode=new ServiceNode(ServiceNode::NodeType::GraphEntry);
 		addNode(*mEntryNode);
-		bindNodes(*mEntryNode, *mStartNode, SourceCFGEdge::EdgeKind::True);
-		bindNodes(*mEntryNode, *mStopNode, SourceCFGEdge::EdgeKind::False);
+		bindNodes(*mEntryNode, *mStartNode, DefaultEdge::EdgeType::True);
+		bindNodes(*mEntryNode, *mStopNode, DefaultEdge::EdgeType::False);
 		return *mEntryNode;
 	}
 
+	inline void bindNodes(SourceCFGNode &SourceNode, SourceCFGNode &TargetNode ) {
+		connect(SourceNode, TargetNode, *(new DefaultEdge(TargetNode, DefaultEdge::EdgeType::Default)));
+	}
+	
 	inline void bindNodes(SourceCFGNode &SourceNode, SourceCFGNode &TargetNode,
-			SourceCFGEdge::EdgeKind _Ekind) {
-		connect(SourceNode, TargetNode, *(new SourceCFGEdge(TargetNode, _Ekind)));
+			DefaultEdge::EdgeType EdgeType) {
+		connect(SourceNode, TargetNode, *(new DefaultEdge(TargetNode, EdgeType)));
+	}
+
+	inline void bindNodes(SourceCFGNode &SourceNode, SourceCFGNode &TargetNode,
+			clang::SwitchCase *Label) {
+		connect(SourceNode, TargetNode, *(new LabeledEdge(TargetNode, Label)));
 	}
 
 	inline ServiceNode *getStartNode() const { return mStartNode; }
@@ -335,8 +379,8 @@ public:
 	~SourceCFG() {
 		for (auto N : Nodes) {
 			for (auto E : N->getEdges())
-				delete E;
-			delete N;
+				E->destroy();
+			N->destroy();
 		}
 	}
 private:
@@ -348,54 +392,47 @@ private:
 class SourceCFGBuilder {
 public:
 	SourceCFGBuilder() : mSCFG(nullptr), mEntryNode(nullptr),
-			mNodeToAdd(nullptr), mTreeTopParentPtr(nullptr) {}
+			mNodeToAdd(nullptr), mTreeTopParentPtr(nullptr), mPrevFirstLabel({nullptr, 0}) {}
 	SourceCFG *populate(clang::FunctionDecl *Decl);
 private:
-	using MarkedOutsType=llvm::DenseMap<SourceCFGNode*, SourceCFGEdge::EdgeKind>;
+	using MarkedOutsType=llvm::DenseMap<SourceCFGNode*, DefaultEdge::EdgeType>;
 	using OutsType=llvm::SmallPtrSet<SourceCFGNode*, 5>;
-	using ParserType=void (SourceCFGBuilder::*)(clang::Stmt*);
+
 	struct LabelInfo {
 		DefaultNode *Node;
-		int LabelIt;
+		size_t LabelIt;
 	};
-	struct GotoInfo {
-		std::map<clang::LabelStmt*, DefaultNode*>::iterator GotoNodeIt;
-		int GotoIt;
-	};
-	static bool compareLabelInfo(const LabelInfo &LI1, const LabelInfo &LI2) {
-		return LI1.LabelIt<LI2.LabelIt;
-	}
-	static bool compareGotoInfo(const GotoInfo &GI1, const GotoInfo &GI2) {
-		return GI1.GotoIt<GI2.GotoIt;
-	}
-	void parseCompoundStmt(clang::CompoundStmt *Stmt);
-	void parseIfStmt(clang::IfStmt *Stmt);
-	void parseStmt(clang::Stmt *Stmt);
+
+	friend bool operator<(const LabelInfo&, const LabelInfo&);
+	void parseCompoundStmt(clang::CompoundStmt *Root);
+	void parseIfStmt(clang::IfStmt *Root);
+	void parseStmt(clang::Stmt *Root);
 	void parseDoStmt(clang::DoStmt *Root);
-	void parseExpr(tsar::Op O, NodeOp *ParentOp, bool isFirstCall);
-	void parseWhileStmt(clang::WhileStmt *Stmt);
+	void parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp, bool isFirstCall);
+	void parseWhileStmt(clang::WhileStmt *Root);
 	void parseBreakStmt(clang::BreakStmt *Root);
 	void parseContinueStmt(clang::ContinueStmt *Root);
 	void parseReturnStmt(clang::ReturnStmt *Root);
-	void parseLabelStmt(clang::LabelStmt *Root);
+	void parseLabelStmt(clang::Stmt *Root);
 	void parseGotoStmt(clang::GotoStmt *Root);
-	void parseDeclStmt(clang::DeclStmt *Stmt, NodeOp *ParentOp);
-	void parseDeclStmtWrapper(clang::DeclStmt *Stmt);
+	void parseDeclStmt(clang::DeclStmt *Root, NodeOp *ParentOp);
 	void parseForStmt(clang::ForStmt *Root);
 	void parseSwitchStmt(clang::SwitchStmt *Root);
-	void parseCaseStmt(clang::CaseStmt *Root);
 	void processIndirect(SourceCFGNode *CondStartNode);
 	void eliminateUnreached();
 	void continueFlow(tsar::NodeOp *Op);
 	void processLabels();
-	static std::map<clang::Stmt::StmtClass, ParserType> mParsers;
+	bool hasConditionalOperator(clang::Stmt *Root);
 	SourceCFG *mSCFG;
-	llvm::DenseMap<clang::LabelStmt*, LabelInfo> mLabels;
-	llvm::DenseMap<clang::CaseStmt*, LabelInfo> mCases;
-	std::map<clang::LabelStmt*, DefaultNode*> mGotos;
+	llvm::SmallDenseMap<clang::Stmt*, LabelInfo> mLabels;
+	llvm::SmallVector<std::pair<clang::Stmt*, DefaultNode*>> mGotos;
+	llvm::SmallVector<std::pair<clang::SwitchCase*, DefaultNode*>> mSwitchGotos;
+	LabelInfo mPrevFirstLabel;
+	size_t mLastLabelIt;
 	DefaultNode *mEntryNode, *mNodeToAdd;
-	std::stack<MarkedOutsType> mDirectOut;
+	std::vector<MarkedOutsType> mDirectOut;
 	std::stack<OutsType> mContinueOut, mBreakOut;
+	std::stack<DefaultNode*> mSwitchNodes;
 	NodeOp *mTreeTopParentPtr;
 };
 } //namespace tsar
@@ -411,11 +448,10 @@ public:
 	bool runOnFunction(Function &F) override;
 	void getAnalysisUsage(AnalysisUsage &AU) const override;
 	void releaseMemory() {
-		//mSCFGBuilder=tsar::SourceCFGBuilder();
+		mSCFGBuilder=tsar::SourceCFGBuilder();
 		if (mSCFG) {
-			//delete mSCFG;
-			//mSCFG=nullptr;
-			;
+			delete mSCFG;
+			mSCFG=nullptr;
 		}
 	}
 	inline tsar::SourceCFG &getSourceCFG() { return *mSCFG; }
