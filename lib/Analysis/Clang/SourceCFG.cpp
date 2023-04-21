@@ -5,21 +5,19 @@
 #include "tsar/Support/MetadataUtils.h"
 #include "tsar/Core/TransformationContext.h"
 #include "tsar/Frontend/Clang/TransformationContext.h"
+#include <clang/AST/Expr.h>
 
-//
-#include <llvm/ADT/DenseMap.h>
-//
+namespace tsar {
+bool operator<(const SourceCFGBuilder::LabelInfo &LI1,
+    const SourceCFGBuilder::LabelInfo &LI2) {
+	return LI1.Node<LI2.Node || (LI1.Node==LI2.Node && LI1.LabelIt>LI2.LabelIt);
+}
+};
 
 using namespace tsar;
 using namespace llvm;
 using namespace clang;
 using namespace std;
-
-namespace tsar {
-bool operator<(const SourceCFGBuilder::LabelInfo &LI1, const SourceCFGBuilder::LabelInfo &LI2) {
-	return LI1.Node<LI2.Node || (LI1.Node==LI2.Node && LI1.LabelIt>LI2.LabelIt);
-}
-};
 
 template<typename KeyT, typename ValueT, typename MapT>
 void addToMap(MapT &Map, KeyT Key, ValueT Value) {
@@ -165,7 +163,8 @@ void WrapperNodeOp::print(StmtStringType &ResStr) const {
 				{
 					ResStr+="case ";
 					llvm::raw_string_ostream StrStream(ResStr);
-					Op.getUnchecked<CaseStmt>().getLHS()->printPretty(StrStream, nullptr, clang::PrintingPolicy(clang::LangOptions()));
+					Op.getUnchecked<CaseStmt>().getLHS()->printPretty(StrStream, nullptr,
+              clang::PrintingPolicy(clang::LangOptions()));
 					ResStr+=":";
 				}
 				break;
@@ -187,10 +186,10 @@ void WrapperNodeOp::print(StmtStringType &ResStr) const {
 void SourceCFGNode::destroy() {
 	switch (mKind) {
 		case NodeKind::Default:
-			delete (DefaultNode*)this;
+			delete (DefaultSCFGNode*)this;
 			break;
 		case NodeKind::Service:
-			delete (ServiceNode*)this;
+			delete (ServiceSCFGNode*)this;
 			break;
 	}
 }
@@ -198,13 +197,13 @@ void SourceCFGNode::destroy() {
 SourceCFGNode::operator std::string() const {
 	switch (mKind) {
 		case NodeKind::Default:
-			return (string)(*(DefaultNode*)this);
+			return (string)(*(DefaultSCFGNode*)this);
 		case NodeKind::Service:
-			return (string)(*(ServiceNode*)this);
+			return (string)(*(ServiceSCFGNode*)this);
 	}
 }
 
-DefaultNode::operator string() const {
+DefaultSCFGNode::operator string() const {
 	string ResStr;
 	for (NodeOp *NO : mBlock) {
 		NO->print(ResStr);
@@ -235,7 +234,7 @@ void SourceCFG::deleteEdge(SourceCFGEdge &_Edge) {
 	_Edge.destroy();
 }
 
-/*
+/* - Not working
 void SourceCFGNode::merge(SourceCFGNode &NodeToAttach) {
 	for (auto E : NodeToAttach.getEdges()) {
 		SourceCFGNodeBase::addEdge(*E);
@@ -245,10 +244,10 @@ void SourceCFGNode::merge(SourceCFGNode &NodeToAttach) {
 }
 */
 
-DefaultNode *SourceCFG::splitNode(DefaultNode &Node, int It) {
+DefaultSCFGNode *SourceCFG::splitNode(DefaultSCFGNode &Node, int It) {
 	if (It==0)
 		return &Node;
-	DefaultNode *NewNode=&emplaceNode();
+	DefaultSCFGNode *NewNode=&emplaceNode();
 	for (auto E : Node.getEdges())
 		NewNode->addEdge(*E);
 	Node.clear();
@@ -261,10 +260,10 @@ DefaultNode *SourceCFG::splitNode(DefaultNode &Node, int It) {
 void SourceCFGEdge::destroy() {
 	switch (mKind) {
 		case EdgeKind::Default:
-			delete (DefaultEdge*)this;
+			delete (DefaultSCFGEdge*)this;
 			break;
 		case EdgeKind::Labeled:
-			delete (LabeledEdge*)this;
+			delete (LabeledSCFGEdge*)this;
 			break;
 	}
 }
@@ -272,9 +271,9 @@ void SourceCFGEdge::destroy() {
 SourceCFGEdge::operator std::string() const {
 	switch (mKind) {
 		case EdgeKind::Default:
-			return (string)(*(DefaultEdge*)this);
+			return (string)(*(DefaultSCFGEdge*)this);
 		case EdgeKind::Labeled:
-			return (string)(*(LabeledEdge*)this);
+			return (string)(*(LabeledSCFGEdge*)this);
 	}
 }
 
@@ -333,11 +332,13 @@ void SourceCFGBuilder::eliminateUnreached() {
 }
 
 void SourceCFGBuilder::processLabels() {
-	std::map<LabelInfo, std::vector<pair<DefaultNode*, SwitchCase*>>> OrderingMap;
+	std::map<LabelInfo, std::vector<pair<DefaultSCFGNode*,
+      SwitchCase*>>> OrderingMap;
 	for (auto GotoIt : mGotos)
 		addToMap(OrderingMap, mLabels[GotoIt.first], pair{GotoIt.second, nullptr});
 	for (auto SwitchIt : mSwitchGotos)
-		addToMap(OrderingMap, mLabels[SwitchIt.first], pair{SwitchIt.second, SwitchIt.first});
+		addToMap(OrderingMap, mLabels[SwitchIt.first], pair{SwitchIt.second,
+        SwitchIt.first});
 	for (auto It : OrderingMap) {
 		auto NewNode=mSCFG->splitNode(*It.first.Node, It.first.LabelIt);
 		for (auto GotoNode : It.second)
@@ -389,7 +390,7 @@ void SourceCFGBuilder::parseStmt(Stmt *Root) {
 		for (auto Outs : mDirectOut.back())
 			mSCFG->bindNodes(*Outs.first, *mNodeToAdd, Outs.second);
 		mDirectOut.back().clear();
-		mDirectOut.back().insert({mNodeToAdd, DefaultEdge::EdgeType::Default});
+		mDirectOut.back().insert({mNodeToAdd, DefaultSCFGEdge::EdgeType::Default});
 	}
 	switch (Type) {
 		case Stmt::StmtClass::CompoundStmtClass:
@@ -439,7 +440,8 @@ void SourceCFGBuilder::parseStmt(Stmt *Root) {
 				parseExpr(DynTypedNode::create(*Root), nullptr, true);
 			else {
 				mNodeToAdd->addOp(new NativeNodeOp(Root));
-				mDirectOut.back().insert({mNodeToAdd, DefaultEdge::EdgeType::Default});
+				mDirectOut.back().insert({mNodeToAdd,
+            DefaultSCFGEdge::EdgeType::Default});
 			}
 	}
 }
@@ -454,7 +456,7 @@ void SourceCFGBuilder::continueFlow(NodeOp *Op) {
 	}
 	else
 		mNodeToAdd->addOp(Op);
-	mDirectOut.back().insert({mNodeToAdd, DefaultEdge::EdgeType::Default});
+	mDirectOut.back().insert({mNodeToAdd, DefaultSCFGEdge::EdgeType::Default});
 }
 
 void SourceCFGBuilder::processIndirect(SourceCFGNode *CondStartNode) {
@@ -464,18 +466,18 @@ void SourceCFGBuilder::processIndirect(SourceCFGNode *CondStartNode) {
 			mSCFG->bindNodes(*Out, *CondStartNode);
 	// Processing of break statements
 	for (auto Out : mBreakOut.top())
-		mDirectOut.back().insert({Out, DefaultEdge::EdgeType::Default});
+		mDirectOut.back().insert({Out, DefaultSCFGEdge::EdgeType::Default});
 }
 
 void SourceCFGBuilder::parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp,
 		bool isFirstCall) {
-	DefaultNode *OldNodeToAdd;
+	DefaultSCFGNode *OldNodeToAdd;
 	WrapperNodeOp *NewNodeOp;
 	if (Op.get<Stmt>()) {
 		Stmt::StmtClass Type=Op.getUnchecked<Stmt>().getStmtClass();
 		if (Op.get<ConditionalOperator>()) {
 			MarkedOutsType UpperOuts;
-			DefaultNode *ConditionNode, *TrueNode, *FalseNode;
+			DefaultSCFGNode *ConditionNode, *TrueNode, *FalseNode;
 			const ConditionalOperator &CO=Op.getUnchecked<ConditionalOperator>();
 			auto OldEntryNode=mEntryNode;
 			auto OldTreeTopParentPtr=mTreeTopParentPtr;
@@ -496,7 +498,7 @@ void SourceCFGBuilder::parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp,
 			parseStmt(CO.getTrueExpr());
 			TrueNode=mEntryNode;
 			mSCFG->bindNodes(*ConditionNode, *TrueNode,
-					DefaultEdge::EdgeType::True);
+					DefaultSCFGEdge::EdgeType::True);
 			UpperOuts=mDirectOut.back();
 			mDirectOut.pop_back();
 			for (auto It : UpperOuts)
@@ -506,7 +508,7 @@ void SourceCFGBuilder::parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp,
 			parseStmt(CO.getFalseExpr());
 			FalseNode=mEntryNode;
 			mSCFG->bindNodes(*ConditionNode, *FalseNode,
-					DefaultEdge::EdgeType::False);
+					DefaultSCFGEdge::EdgeType::False);
 			UpperOuts=mDirectOut.back();
 			mDirectOut.pop_back();
 			for (auto It : UpperOuts)
@@ -527,10 +529,8 @@ void SourceCFGBuilder::parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp,
 			NewNodeOp=new WrapperNodeOp(&Op.getUnchecked<Stmt>());
 			switch (Type) {
 				case Stmt::StmtClass::CompoundAssignOperatorClass:
-					//parseExpr(((clang::BinaryOperator*)Op.S)->getLHS(), NewNodeOp, false);
 					parseExpr(DynTypedNode::create(*Op.getUnchecked<clang::
 							BinaryOperator>().getLHS()), NewNodeOp, false);
-					//parseExpr(((clang::BinaryOperator*)Op.S)->getRHS(), NewNodeOp, false);
 					parseExpr(DynTypedNode::create(*Op.getUnchecked<clang::
 							BinaryOperator>().getRHS()), NewNodeOp, false);
 					break;
@@ -560,7 +560,8 @@ void SourceCFGBuilder::parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp,
 		if (isFirstCall)
 			mTreeTopParentPtr=nullptr;
 		NewNodeOp=new WrapperNodeOp(&Op.getUnchecked<VarDecl>());
-		parseExpr(DynTypedNode::create(*Op.getUnchecked<VarDecl>().getInit()), NewNodeOp, false);
+		parseExpr(DynTypedNode::create(*Op.getUnchecked<VarDecl>().getInit()),
+        NewNodeOp, false);
 	}
 	NodeOp *OpToAdd;
 	if (mNodeToAdd && OldNodeToAdd==mNodeToAdd) {
@@ -586,7 +587,7 @@ void SourceCFGBuilder::parseExpr(clang::DynTypedNode Op, NodeOp *ParentOp,
 
 void SourceCFGBuilder::parseCompoundStmt(CompoundStmt *Root) {
 	MarkedOutsType UpperOuts;
-	DefaultNode *ResultEntryNode=mEntryNode;
+	DefaultSCFGNode *ResultEntryNode=mEntryNode;
 	mDirectOut.push_back(MarkedOutsType());
 	for (auto S : Root->body()) {
 		parseStmt(S);
@@ -601,7 +602,7 @@ void SourceCFGBuilder::parseCompoundStmt(CompoundStmt *Root) {
 }
 
 void SourceCFGBuilder::parseDoStmt(DoStmt *Root) {
-	DefaultNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode, *Body;
+	DefaultSCFGNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode, *Body;
 	mContinueOut.push(OutsType());
 	mBreakOut.push(OutsType());
 	mDirectOut.push_back(MarkedOutsType());
@@ -620,12 +621,13 @@ void SourceCFGBuilder::parseDoStmt(DoStmt *Root) {
 	}
 	else
 		CondStartNode=mNodeToAdd;
-	parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root), true);
+	parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root),
+      true);
 	CondEndNode=mNodeToAdd;
-	mSCFG->bindNodes(*CondEndNode, *Body, DefaultEdge::EdgeType::True);
+	mSCFG->bindNodes(*CondEndNode, *Body, DefaultSCFGEdge::EdgeType::True);
 	mDirectOut.pop_back();
 	mDirectOut.back().erase(mStartNode);
-	mDirectOut.back().insert({CondEndNode, DefaultEdge::EdgeType::False});
+	mDirectOut.back().insert({CondEndNode, DefaultSCFGEdge::EdgeType::False});
 	mNodeToAdd=nullptr;
 	mEntryNode=mStartNode;
 	processIndirect(CondStartNode);
@@ -634,7 +636,7 @@ void SourceCFGBuilder::parseDoStmt(DoStmt *Root) {
 }
 
 void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
-	DefaultNode *mStartNode=mNodeToAdd, *CondStartNode=nullptr,
+	DefaultSCFGNode *mStartNode=mNodeToAdd, *CondStartNode=nullptr,
 		*CondEndNode=nullptr, *Body=nullptr, *IncStartNode=nullptr, *LoopNode;
 	MarkedOutsType AfterInitOuts;
 	mContinueOut.push(OutsType());
@@ -654,7 +656,8 @@ void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
 				mSCFG->bindNodes(*Out.first, *CondStartNode, Out.second);
 			mDirectOut.back().clear();
 		}
-		parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root), true);
+		parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root),
+        true);
 		CondEndNode=mNodeToAdd;
 	}
 	mDirectOut.back().clear();
@@ -662,7 +665,7 @@ void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
 	parseStmt(Root->getBody());
 	Body=mEntryNode;
 	if (CondEndNode)
-		mSCFG->bindNodes(*CondEndNode, *Body, DefaultEdge::EdgeType::True);
+		mSCFG->bindNodes(*CondEndNode, *Body, DefaultSCFGEdge::EdgeType::True);
 	else
 		for (auto Out : AfterInitOuts)
 			mSCFG->bindNodes(*Out.first, *Body, Out.second);
@@ -677,7 +680,7 @@ void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
 		mSCFG->bindNodes(*Out.first, *LoopNode, Out.second);
 	mDirectOut.back().clear();
 	if (CondEndNode)
-		mDirectOut.back().insert({CondEndNode, DefaultEdge::EdgeType::False});
+		mDirectOut.back().insert({CondEndNode, DefaultSCFGEdge::EdgeType::False});
 	mNodeToAdd=nullptr;
 	mEntryNode=mStartNode;
 	if (IncStartNode)
@@ -693,11 +696,12 @@ void SourceCFGBuilder::parseForStmt(ForStmt *Root) {
 
 void SourceCFGBuilder::parseSwitchStmt(SwitchStmt *Root) {
 	mBreakOut.push(OutsType());
-	DefaultNode *CondStartNode=mNodeToAdd, *CondEndNode;
-	parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root), true);
+	DefaultSCFGNode *CondStartNode=mNodeToAdd, *CondEndNode;
+	parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root),
+      true);
 	CondEndNode=mNodeToAdd;
 	mSwitchNodes.push(CondEndNode);
-	mDirectOut.back()[CondEndNode]=DefaultEdge::EdgeType::ImplicitDefault;
+	mDirectOut.back()[CondEndNode]=DefaultSCFGEdge::EdgeType::ImplicitDefault;
 	mEntryNode=mNodeToAdd=nullptr;
 	parseStmt(Root->getBody());
 	processIndirect(nullptr);
@@ -709,26 +713,28 @@ void SourceCFGBuilder::parseWhileStmt(WhileStmt *Root) {
 	mContinueOut.push(OutsType());
 	mBreakOut.push(OutsType());
 	mDirectOut.push_back(MarkedOutsType());
-	DefaultNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode;
+	DefaultSCFGNode *mStartNode=mNodeToAdd, *CondStartNode, *CondEndNode;
 	if (mStartNode->size()==0) {
 		CondStartNode=mStartNode;
-		parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root), true);
+		parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root),
+        true);
 	}
 	else {
 		CondStartNode=mNodeToAdd=&mSCFG->emplaceNode();
 		mSCFG->bindNodes(*mStartNode, *CondStartNode);
-		parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root), true);
+		parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root),
+        true);
 	}
 	CondEndNode=mNodeToAdd;
 	mDirectOut.back().erase(CondEndNode);
 	mEntryNode=mNodeToAdd=nullptr;
 	parseStmt(Root->getBody());
-	mSCFG->bindNodes(*CondEndNode, *mEntryNode, DefaultEdge::EdgeType::True);
+	mSCFG->bindNodes(*CondEndNode, *mEntryNode, DefaultSCFGEdge::EdgeType::True);
 	for (auto Outs : mDirectOut.back())
 		mSCFG->bindNodes(*Outs.first, *CondStartNode, Outs.second);
 	mDirectOut.pop_back();
 	mDirectOut.back().erase(mStartNode);
-	mDirectOut.back().insert({CondEndNode, DefaultEdge::EdgeType::False});
+	mDirectOut.back().insert({CondEndNode, DefaultSCFGEdge::EdgeType::False});
 	mEntryNode=mStartNode;
 	mNodeToAdd=nullptr;
 	processIndirect(CondStartNode);
@@ -738,27 +744,28 @@ void SourceCFGBuilder::parseWhileStmt(WhileStmt *Root) {
 
 void SourceCFGBuilder::parseIfStmt(IfStmt *Root) {
 	MarkedOutsType UpperOuts;
-	DefaultNode *CondStartNode=mNodeToAdd, *CondEndNode;
+	DefaultSCFGNode *CondStartNode=mNodeToAdd, *CondEndNode;
 	Stmt *ActionStmt;
-	parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root), true);
+	parseExpr(DynTypedNode::create(*Root->getCond()), new WrapperNodeOp(Root),
+      true);
 	CondEndNode=mNodeToAdd;
 	mDirectOut.push_back(MarkedOutsType());
 	mEntryNode=mNodeToAdd=nullptr;
 	parseStmt(Root->getThen());
-	mSCFG->bindNodes(*CondEndNode, *mEntryNode, DefaultEdge::EdgeType::True);
+	mSCFG->bindNodes(*CondEndNode, *mEntryNode, DefaultSCFGEdge::EdgeType::True);
 	if ((ActionStmt=Root->getElse())) {
 		mDirectOut.push_back(MarkedOutsType());
 		mEntryNode=mNodeToAdd=nullptr;
 		parseStmt(ActionStmt);
 		mSCFG->bindNodes(*CondEndNode, *mEntryNode,
-				DefaultEdge::EdgeType::False);
+				DefaultSCFGEdge::EdgeType::False);
 		UpperOuts=mDirectOut.back();
 		mDirectOut.pop_back();
 		for (auto Out : UpperOuts)
 			mDirectOut.back().insert(Out);
 	}
 	else
-		mDirectOut.back().insert({CondEndNode, DefaultEdge::EdgeType::False});
+		mDirectOut.back().insert({CondEndNode, DefaultSCFGEdge::EdgeType::False});
 	UpperOuts=mDirectOut.back();
 	mDirectOut.pop_back();
 	mDirectOut.back().erase(CondEndNode);
@@ -791,12 +798,10 @@ void SourceCFGBuilder::parseGotoStmt(GotoStmt *Root) {
 
 void SourceCFGBuilder::parseLabelStmt(Stmt *Root) {
 	mNodeToAdd->addOp(new WrapperNodeOp(Root));
-	if (!mPrevFirstLabel.Node || mPrevFirstLabel.Node!=mNodeToAdd || mLastLabelIt<mNodeToAdd->size()-2)
+	if (!mPrevFirstLabel.Node || mPrevFirstLabel.Node!=mNodeToAdd ||
+    mLastLabelIt<mNodeToAdd->size()-2)
 		mPrevFirstLabel={mNodeToAdd, mNodeToAdd->size()-1};
 	mLastLabelIt=mNodeToAdd->size()-1;
-	//if (isa<SwitchCase>(*Root))
-		//mLabels.insert({Root, mPrevFirstLabelm, (SwitchCase*)Root});
-	//else
 	mLabels.insert({Root, mPrevFirstLabel});
 	if (isa<LabelStmt>(*Root))
 		parseStmt(((LabelStmt*)Root)->getSubStmt());
@@ -806,7 +811,8 @@ void SourceCFGBuilder::parseLabelStmt(Stmt *Root) {
 
 void SourceCFGBuilder::parseReturnStmt(ReturnStmt *Root) {
 	if (Root->getRetValue())
-		parseExpr(DynTypedNode::create(*Root->getRetValue()), new WrapperNodeOp(Root), true);
+		parseExpr(DynTypedNode::create(*Root->getRetValue()),
+        new WrapperNodeOp(Root), true);
 	else
 		mNodeToAdd->addOp(new NativeNodeOp(Root));
 	mSCFG->bindNodes(*mNodeToAdd, *mSCFG->getStopNode());
@@ -866,8 +872,9 @@ struct ClangSourceCFGPrinter : public DOTGraphTraitsPrinterWrapperPass<
 	ClangSourceCFGPass, false, tsar::SourceCFG*,
 	ClangSourceCFGPassGraphTraits> {
 	static char ID;
-	ClangSourceCFGPrinter() : DOTGraphTraitsPrinterWrapperPass<ClangSourceCFGPass,
-		false, tsar::SourceCFG*, ClangSourceCFGPassGraphTraits>("scfg", ID) {
+	ClangSourceCFGPrinter() : DOTGraphTraitsPrinterWrapperPass<
+    ClangSourceCFGPass, false, tsar::SourceCFG*,
+    ClangSourceCFGPassGraphTraits>("scfg", ID) {
 		initializeClangSourceCFGPrinterPass(*PassRegistry::getPassRegistry());
 	}
 };
