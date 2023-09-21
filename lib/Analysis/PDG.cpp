@@ -23,40 +23,40 @@ void addToMap(map<KeyT, Container> &Map, KeyT Key, ValueT Value) {
 inline void PDGBuilder::processControlDependence() {
 	map<SourceCFGNode*, set<SourceCFGNode*>> DependenceInfo;
 	for (auto SourceNodeIt=++df_begin(getRealRoot());
-    SourceNodeIt!=df_end(getRealRoot()); ++SourceNodeIt)
+		SourceNodeIt!=df_end(getRealRoot()); ++SourceNodeIt)
 		for (auto TargetNodeIt=++df_begin(SourceNodeIt->getIDom());
-      TargetNodeIt!=df_end(SourceNodeIt->getIDom()); ++TargetNodeIt)
+			TargetNodeIt!=df_end(SourceNodeIt->getIDom()); ++TargetNodeIt)
 			if (SourceNodeIt->getBlock()->hasEdgeTo(*TargetNodeIt->getBlock())
 				/*
-        && !( (SourceNodeIt->getBlock()->getKind()==
-        SourceCFGNode::NodeKind::Service
+				&& !( (SourceNodeIt->getBlock()->getKind()==
+				SourceCFGNode::NodeKind::Service
 				&& ((ServiceNode*)SourceNodeIt->getBlock())->getType()!=
-        ServiceNode::NodeType::GraphEntry)
+				ServiceNode::NodeType::GraphEntry)
 				|| (TargetNodeIt->getBlock()->getKind()==
-        SourceCFGNode::NodeKind::Service
+				SourceCFGNode::NodeKind::Service
 				&& ((ServiceNode*)TargetNodeIt->getBlock())->getType()!=
-        ServiceNode::NodeType::GraphEntry) )
-        */
-        )
+				ServiceNode::NodeType::GraphEntry) )
+				*/
+				)
 				for (unsigned I=TargetNodeIt.getPathLength()-1; I>0; --I)
 					addToMap(DependenceInfo, SourceNodeIt->getBlock(),
-              TargetNodeIt.getPath(I)->getBlock());
+							TargetNodeIt.getPath(I)->getBlock());
 	for (auto N : *mSCFG)
 		if (!(N->getKind()==SourceCFGNode::NodeKind::Service &&
-      ((ServiceSCFGNode*)N)->getType()!=ServiceSCFGNode::NodeType::GraphEntry))
+			((ServiceSCFGNode*)N)->getType()!=ServiceSCFGNode::NodeType::GraphEntry))
 			mPDG->emplaceNode(N);
 	for (auto DIIt : DependenceInfo)
 		for (auto TargetNodeIt : DIIt.second) {
 			if (DIIt.first->getKind()==SourceCFGNode::NodeKind::Service
 				&& ((ServiceSCFGNode*)DIIt.first)->getType()!=
-          ServiceSCFGNode::NodeType::GraphEntry)
+					ServiceSCFGNode::NodeType::GraphEntry)
 				break;
 			if (!(TargetNodeIt->getKind()==SourceCFGNode::NodeKind::Service
 				&& ((ServiceSCFGNode*)TargetNodeIt)->getType()!=
-        ServiceSCFGNode::NodeType::GraphEntry))
+				ServiceSCFGNode::NodeType::GraphEntry))
 				mPDG->bindNodes(*mPDG->getNode(DIIt.first),
-            *mPDG->getNode(TargetNodeIt),
-            PDGEdge::EdgeKind::ControlDependence);
+						*mPDG->getNode(TargetNodeIt),
+						PDGEdge::EdgeKind::ControlDependence);
 		}
 }
 
@@ -68,11 +68,11 @@ PDG *PDGBuilder::populate(SourceCFG &_SCFG) {
 	mSCFG=&_SCFG;
 	mSCFG->emplaceEntryNode();
 	mSCFG->recalculatePredMap();
-  mSPDT=PostDomTreeBase<SourceCFGNode>();
-  mSPDT.recalculate(*mSCFG);
-	/*May be useful
-  dumpDotGraphToFile(mSPDT, "post-dom-tree.dot", "post-dom-tree");
-  */
+	mSPDT=PostDomTreeBase<SourceCFGNode>();
+	mSPDT.recalculate(*mSCFG);
+	/*May be useful*/
+	dumpDotGraphToFile(&mSPDT, "post-dom-tree.dot", "post-dom-tree");
+	/**/
 	processControlDependence();
 	return mPDG;
 }
@@ -136,9 +136,9 @@ INITIALIZE_PASS_IN_GROUP(PDGPrinter, "print-pdg",
 	DefaultQueryManager::OutputPassGroup::getPassRegistry())
 
 FunctionPass *llvm::createPDGPrinter() {
-  return new PDGPrinter;
+	return new PDGPrinter;
 }
 
 FunctionPass *llvm::createPDGViewer() {
-  return new PDGViewer;
+	return new PDGViewer;
 }

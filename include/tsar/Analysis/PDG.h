@@ -26,7 +26,7 @@ class PDGEdge : public PDGEdgeBase {
 public:
 	enum class EdgeKind {ControlDependence, DataDependence};
 	PDGEdge(PDGNode &_TargetNode, EdgeKind _Kind)
-      : PDGEdgeBase(_TargetNode), Kind(_Kind) {}
+			: PDGEdgeBase(_TargetNode), Kind(_Kind) {}
 	inline EdgeKind getKind() const { return Kind; }
 private:
 	EdgeKind Kind;
@@ -36,7 +36,7 @@ class PDGNode : public PDGNodeBase {
 public:
 	enum class NodeKind {Default, Region};
 	PDGNode(SourceCFGNode *_mBlock)
-      : mBlock(_mBlock), mKind(NodeKind::Default) {}
+			: mBlock(_mBlock), mKind(NodeKind::Default) {}
 	inline NodeKind getKind() const { return mKind; }
 	SourceCFGNode *getBlock() const { return mBlock; }
 private:
@@ -48,7 +48,7 @@ class PDG : public PDGBase {
 	friend class PDGBuilder;
 public:
 	PDG(const std::string &_FunctionName, SourceCFG *_mSCFG)
-      : FunctionName(_FunctionName), mSCFG(_mSCFG) {}
+			: FunctionName(_FunctionName), mSCFG(_mSCFG) {}
 
 	inline bool addNode(PDGNode &N) {
 		if (PDGBase::addNode(N)) {
@@ -66,7 +66,7 @@ public:
 	}
 
 	inline void bindNodes(PDGNode &SourceNode, PDGNode &TargetNode,
-      PDGEdge::EdgeKind _Ekind) {
+			PDGEdge::EdgeKind _Ekind) {
 		connect(SourceNode, TargetNode, *(new PDGEdge(TargetNode, _Ekind)));
 	}
 
@@ -98,11 +98,11 @@ public:
 private:
 	inline void processControlDependence();
 	inline llvm::DomTreeNodeBase<SourceCFGNode> *getRealRoot() {
-    return *mSPDT.getRootNode()->begin();
+		return *mSPDT.getRootNode()->begin();
 	}
 	PDG *mPDG;
 	SourceCFG *mSCFG;
-  llvm::PostDomTreeBase<SourceCFGNode> mSPDT;
+	llvm::PostDomTreeBase<SourceCFGNode> mSPDT;
 };
 
 }//namespace tsar
@@ -143,8 +143,8 @@ template<> struct GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
 };
 
 template<bool IsPostDom> struct GraphTraits<DominatorTreeBase<
-  tsar::SourceCFGNode, IsPostDom>*>
-      : public GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
+	tsar::SourceCFGNode, IsPostDom>*>
+			: public GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
 	static NodeRef getEntryNode(DominatorTreeBase<tsar::SourceCFGNode,
 			IsPostDom> *Tree) {
 		return Tree->getRootNode();
@@ -159,7 +159,7 @@ template<bool IsPostDom> struct GraphTraits<DominatorTreeBase<
 		return df_end(Tree->getRootNode());
 	}
 	static unsigned size(DominatorTreeBase<tsar::SourceCFGNode,
-      IsPostDom> *Tree) {
+			IsPostDom> *Tree) {
 		return Tree->root_size();
 	}
 };
