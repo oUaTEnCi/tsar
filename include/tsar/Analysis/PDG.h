@@ -6,52 +6,76 @@
 #include <bcl/utility.h>
 #include <llvm/ADT/DirectedGraph.h>
 #include <llvm/Support/GenericDomTree.h>
+//
 #include <llvm/ADT/DepthFirstIterator.h>
 #include <llvm/ADT/GraphTraits.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/IndexedMap.h>
+//
 #include <llvm/Support/DOTGraphTraits.h>
 #include <llvm/Pass.h>
 #include <map>
+//
+#include <llvm/IR/CFG.h>
+//
 
 namespace tsar {
 
-class PDGNode;
-class PDGEdge;
-class PDG;
-class PDGBuilder;
-using PDGNodeBase=llvm::DGNode<PDGNode, PDGEdge>;
-using PDGEdgeBase=llvm::DGEdge<PDGNode, PDGEdge>;
-using PDGBase=llvm::DirectedGraph<PDGNode, PDGEdge>;
+template<typename CFGType>
+struct CFGTrairs {
 
-class PDGEdge : public PDGEdgeBase {
-public:
-	enum class EdgeKind {ControlDependence, DataDependence};
-	PDGEdge(PDGNode &_TargetNode, EdgeKind _Kind)
-			: PDGEdgeBase(_TargetNode), Kind(_Kind) {}
-	inline EdgeKind getKind() const { return Kind; }
-private:
-	EdgeKind Kind;
 };
 
-class PDGNode : public PDGNodeBase {
+/*template<typename CFGType>
+class CDGNode;
+template<typename CFGType>
+class CDGEdge;
+template<typename CFGType>
+class CDG;
+class CDGBuilder;
+
+template<typename CFGType>
+using CDGNodeBase=llvm::DGNode<CDGNode<CFGType>, CDGEdge<CFGType>>;
+template<typename CFGType>
+using CDGEdgeBase=llvm::DGEdge<CDGNode<CFGType>, CDGEdge<CFGType>>;
+template<typename CFGType>
+using CDGBase=llvm::DirectedGraph<CDGNode<CFGType>, CDGEdge<CFGType>>;
+
+template<typename CFGType>
+class CDGEdge : public CDGEdgeBase<CFGType> {
 public:
-	enum class NodeKind {Default, Region};
-	PDGNode(SourceCFGNode *_mBlock)
+	//CDGEdge(CDGNode &_TargetNode) : CDGEdgeBase(_TargetNode) {}
+};
+
+template<typename CFGType>
+class CDGNode : public CDGNodeBase<CFGType> {
+public:
+	using NodeType=*(GraphTraits<CFGType>::NodeRef);
+	using NodePtr=GraphTraits<CFGType>::NodeRef;
+
+	enum class NodeKind {Entry, Default, Region};
+	CDGNode(SourceCFGNode *_mBlock)
 			: mBlock(_mBlock), mKind(NodeKind::Default) {}
 	inline NodeKind getKind() const { return mKind; }
 	SourceCFGNode *getBlock() const { return mBlock; }
 private:
-	SourceCFGNode *mBlock;
+	//SourceCFGNode *mBlock;
+	NodeType mBlock;
 	NodeKind mKind;
 };
 
-class PDG : public PDGBase {
+template<typename CFGType>
+class PDG : public CDGBase<CFGType> {
 	friend class PDGBuilder;
 public:
+	using NodeType=GraphTraits<CFGType>::NodeRef;
+
 	PDG(const std::string &_FunctionName, SourceCFG *_mSCFG)
 			: FunctionName(_FunctionName), mSCFG(_mSCFG) {}
 
-	inline bool addNode(PDGNode &N) {
-		if (PDGBase::addNode(N)) {
+	inline bool addNode(CDGNode &N) {
+		if (CDGBase::addNode(N)) {
 			BlockToNodeMap.insert({N.getBlock(), &N});
 			return true;
 		}
@@ -59,22 +83,22 @@ public:
 			return false;
 	}
 
-	PDGNode &emplaceNode(SourceCFGNode *Block) {
-		PDGNode *NewNode=new PDGNode(Block);
+	CDGNode &emplaceNode(SourceCFGNode *Block) {
+		CDGNode *NewNode=new CDGNode(Block);
 		addNode(*NewNode);
 		return *NewNode;
 	}
 
-	inline void bindNodes(PDGNode &SourceNode, PDGNode &TargetNode,
-			PDGEdge::EdgeKind _Ekind) {
-		connect(SourceNode, TargetNode, *(new PDGEdge(TargetNode, _Ekind)));
+	inline void bindNodes(CDGNode &SourceNode, CDGNode &TargetNode,
+			CDGEdge::EdgeKind _Ekind) {
+		connect(SourceNode, TargetNode, *(new CDGEdge(TargetNode, _Ekind)));
 	}
 
-	inline PDGNode *getNode(SourceCFGNode *Block) {
+	inline CDGNode *getNode(SourceCFGNode *Block) {
 		return BlockToNodeMap[Block];
 	}
 
-	inline PDGNode *getEntryNode() {
+	inline CDGNode *getEntryNode() {
 		return getNode(mSCFG->getEntryNode());
 	}
 
@@ -87,9 +111,32 @@ public:
 	}
 private:
 	std::string FunctionName;
-	std::map<SourceCFGNode*, PDGNode*> BlockToNodeMap;
-	SourceCFG *mSCFG;
+	std::map<SourceCFGNode*, CDGNode*> BlockToNodeMap;
+	CFGType *mCFG;
+};*/
+
+template<typename CFGType>
+class CDGNode;
+
+template<typename CFGType>
+class ControlDependenceGraph {
+public:
+	using CFGNodeType=GraphTraits<CFGType>::NodeRef;
+	using CFGNodeMapType=llvm::DenseMap<CFGNodeType, CDNode>;
+	using NodeStorageType=llvm::SmallVector<CDGNode, 10>;
+	using EdgeType=NodeStorageType::iterator;
+private:
+	NodeStorageType mNodes;
+	CFGNodeMapType mBBtoNodeMap;
 };
+
+template<typename CFGType>
+class CDGNode {
+public:
+	using EdgeStorageType=llvm::SmallVector<ControlDependenceGraph::EdgeType, 5>;
+};
+
+
 
 class PDGBuilder {
 public:
@@ -181,14 +228,14 @@ template<bool IsPostDom> struct DOTGraphTraits<DominatorTreeBase<
 	}
 };
 
-template<> struct GraphTraits<tsar::PDGNode*> {
-	using NodeRef=tsar::PDGNode*;
-	static tsar::PDGNode *PDGGetTargetNode(tsar::PDGEdge *E) {
+template<> struct GraphTraits<tsar::CDGNode*> {
+	using NodeRef=tsar::CDGNode*;
+	static tsar::CDGNode *PDGGetTargetNode(tsar::CDGEdge *E) {
 		return &E->getTargetNode();
 	}
-	using ChildIteratorType=mapped_iterator<tsar::PDGNode::iterator,
+	using ChildIteratorType=mapped_iterator<tsar::CDGNode::iterator,
 			decltype(&PDGGetTargetNode)>;
-	using ChildEdgeIteratorType=tsar::PDGNode::iterator;
+	using ChildEdgeIteratorType=tsar::CDGNode::iterator;
 	static NodeRef getEntryNode(NodeRef N) { return N; }
 	static ChildIteratorType child_begin(NodeRef N) {
 		return ChildIteratorType(N->begin(), &PDGGetTargetNode);
@@ -203,7 +250,7 @@ template<> struct GraphTraits<tsar::PDGNode*> {
 };
 
 template<> struct GraphTraits<tsar::PDG*> :
-		public GraphTraits<tsar::PDGNode*> {
+		public GraphTraits<tsar::CDGNode*> {
 	using nodes_iterator=tsar::PDG::iterator;
 	static NodeRef getEntryNode(tsar::PDG *Graph) {
 		return Graph->getEntryNode();
@@ -214,7 +261,7 @@ template<> struct GraphTraits<tsar::PDG*> :
 	static nodes_iterator nodes_end(tsar::PDG *Graph) {
 		return Graph->end();
 	}
-	using EdgeRef=tsar::PDGEdge*;
+	using EdgeRef=tsar::CDGEdge*;
 	static NodeRef edge_dest(EdgeRef E) { return &E->getTargetNode(); }
 	static unsigned size(tsar::PDG *Graph) { return Graph->size(); }
 };
@@ -224,7 +271,7 @@ template<> struct DOTGraphTraits<tsar::PDG*> : public DefaultDOTGraphTraits {
 	static std::string getGraphName(const tsar::PDG *Graph) {
 		return "Control Dependence Graph";
 	}
-	std::string getNodeLabel(const tsar::PDGNode *Node, const tsar::PDG *Graph) {
+	std::string getNodeLabel(const tsar::CDGNode *Node, const tsar::PDG *Graph) {
 		return (std::string)*Node->getBlock();
 	}
 };
