@@ -6,13 +6,10 @@
 #include <bcl/utility.h>
 #include <llvm/ADT/DirectedGraph.h>
 #include <llvm/Support/GenericDomTree.h>
-//
 #include <llvm/ADT/DepthFirstIterator.h>
 #include <llvm/ADT/GraphTraits.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/DenseMap.h>
-#include <llvm/ADT/IndexedMap.h>
-//
 #include <llvm/Support/DOTGraphTraits.h>
 #include <llvm/Pass.h>
 #include <map>
@@ -27,12 +24,11 @@ struct CFGTrairs {
 
 };
 
-/*template<typename CFGType>
+template<typename CFGType>
 class CDGNode;
 template<typename CFGType>
 class CDGEdge;
 template<typename CFGType>
-class CDG;
 class CDGBuilder;
 
 template<typename CFGType>
@@ -51,28 +47,31 @@ public:
 template<typename CFGType>
 class CDGNode : public CDGNodeBase<CFGType> {
 public:
-	using NodeType=*(GraphTraits<CFGType>::NodeRef);
-	using NodePtr=GraphTraits<CFGType>::NodeRef;
+	using CFGNodeType=GraphTraits<CFGType>::NodeRef;
 
 	enum class NodeKind {Entry, Default, Region};
-	CDGNode(SourceCFGNode *_mBlock)
+	CDGNode(CFGNodeType _mBlock)
 			: mBlock(_mBlock), mKind(NodeKind::Default) {}
 	inline NodeKind getKind() const { return mKind; }
-	SourceCFGNode *getBlock() const { return mBlock; }
+	inline CFGNodeType getBlock() const { return mBlock; }
 private:
-	//SourceCFGNode *mBlock;
-	NodeType mBlock;
+	CFGNodeType mBlock;
 	NodeKind mKind;
 };
 
 template<typename CFGType>
-class PDG : public CDGBase<CFGType> {
+class ControlDependenceGraph : public CDGBase<CFGType> {
 	friend class PDGBuilder;
 public:
 	using NodeType=GraphTraits<CFGType>::NodeRef;
+	using CFGNodeMapType=llvm::DenseMap<CFGNodeType, CDGNode>;
 
-	PDG(const std::string &_FunctionName, SourceCFG *_mSCFG)
-			: FunctionName(_FunctionName), mSCFG(_mSCFG) {}
+	struct AugmentedCFG {
+		CFGType *CFG;
+	}
+
+	PDG(const std::string &_FunctionName, CFGType *_mCFG)
+			: FunctionName(_FunctionName), mSCFG(_mCFG) {}
 
 	inline bool addNode(CDGNode &N) {
 		if (CDGBase::addNode(N)) {
@@ -111,44 +110,22 @@ public:
 	}
 private:
 	std::string FunctionName;
-	std::map<SourceCFGNode*, CDGNode*> BlockToNodeMap;
+	CFGNodeMapType BlockToNodeMap;
 	CFGType *mCFG;
-};*/
-
-template<typename CFGType>
-class CDGNode;
-
-template<typename CFGType>
-class ControlDependenceGraph {
-public:
-	using CFGNodeType=GraphTraits<CFGType>::NodeRef;
-	using CFGNodeMapType=llvm::DenseMap<CFGNodeType, CDNode>;
-	using NodeStorageType=llvm::SmallVector<CDGNode, 10>;
-	using EdgeType=NodeStorageType::iterator;
-private:
-	NodeStorageType mNodes;
-	CFGNodeMapType mBBtoNodeMap;
 };
 
 template<typename CFGType>
-class CDGNode {
+class CDGBuilder {
 public:
-	using EdgeStorageType=llvm::SmallVector<ControlDependenceGraph::EdgeType, 5>;
-};
-
-
-
-class PDGBuilder {
-public:
-	PDGBuilder() : mPDG(nullptr) {}
-	PDG *populate(SourceCFG &_SCFG);
+	CDGBuilder() : mPDG(nullptr) {}
+	ControlDependenceGraph<CFGType> *populate(CFGType &_SCFG);
 private:
 	inline void processControlDependence();
 	inline llvm::DomTreeNodeBase<SourceCFGNode> *getRealRoot() {
 		return *mSPDT.getRootNode()->begin();
 	}
-	PDG *mPDG;
-	SourceCFG *mSCFG;
+	ControlDependeceGraph<CFGType> *mCDG;
+	CFGType *mCFG;
 	llvm::PostDomTreeBase<SourceCFGNode> mSPDT;
 };
 
@@ -156,26 +133,30 @@ private:
 
 namespace llvm {
 
-class PDGPass : public FunctionPass, private bcl::Uncopyable {
+template<typename CFGType>
+class CDGPass : public FunctionPass, private bcl::Uncopyable {
 public:
 	static char ID;
-	PDGPass() : FunctionPass(ID), mPDG(nullptr) {
+	CDGPass() : FunctionPass(ID), mCDG(nullptr) {
 		initializePDGPassPass(*PassRegistry::getPassRegistry());
 	}
 	bool runOnFunction(Function &F) override;
 	void getAnalysisUsage(AnalysisUsage &AU) const override;
 	void releaseMemory() {
-		mPDGBuilder=tsar::PDGBuilder();
-		if (mPDG) {
-			delete mPDG;
-			mPDG=nullptr;
+		mCDGBuilder=tsar::CDGBuilder<CFGType>();
+		if (mCDG) {
+			delete mCDG;
+			mCDG=nullptr;
 		}
 	}
-	inline tsar::PDG &getPDG() { return *mPDG; }
+	inline tsar::ControlDependenceGraph<CFGType> &getCDG() { return *mCDG; }
 private:
-	tsar::PDGBuilder mPDGBuilder;
-	tsar::PDG *mPDG;
+	tsar::CDGBuilder<CFGType> mCDGBuilder;
+	tsar::ControlDependenceGraph<CFGType> *mCDG;
 };
+
+using SourceCDGPass=CDGPass<tsar::SourceCFG>;
+using IRCDGPass=CDGPass<Function>;
 
 template<> struct GraphTraits<DomTreeNodeBase<tsar::SourceCFGNode>*> {
 	using NodeRef=DomTreeNodeBase<tsar::SourceCFGNode>*;

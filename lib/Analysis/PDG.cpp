@@ -79,13 +79,13 @@ PDG *PDGBuilder::populate(SourceCFG &_SCFG) {
 
 char PDGPass::ID=0;
 
-INITIALIZE_PASS_BEGIN(PDGPass, "pdg",
-	"Program Dependency Graph", false, true)
+INITIALIZE_PASS_BEGIN(SourceCDGPass, "source-cdg",
+	"Control Dependence Graph from source code", false, true)
 INITIALIZE_PASS_DEPENDENCY(ClangSourceCFGPass)
-INITIALIZE_PASS_END(PDGPass, "pdg",
-	"Program Dependency Graph", false, true)
+INITIALIZE_PASS_END(SourceCDGPass, "source-cdg",
+	"Control Dependence Graph from source code", false, true)
 
-FunctionPass *createPDGPass() { return new PDGPass; }
+FunctionPass *createSourceCDGPass() { return new SourceCDGPass; }
 
 void PDGPass::getAnalysisUsage(AnalysisUsage &AU) const {
 	AU.addRequired<ClangSourceCFGPass>();
