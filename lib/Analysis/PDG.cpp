@@ -428,36 +428,55 @@ std::string PDGDotGraphTraits::getVerboseEdgeAttributes(const PDGNode *Src,
   raw_string_ostream OS(Str);
   // DEBUG:
   auto PrintMemoryEdge=[&OS](const MemoryPDGEdge &E) {
-    if (llvm::Dependence * const *Dep=std::get_if<llvm::Dependence*>(&E.getMemoryDep())) {
+    if (llvm::Dependence * const *Dep=std::get_if<llvm::Dependence*>(&E.
+        getMemoryDep())) {
       (*Dep)->dump(OS);
       OS.str().pop_back();
     }
     else {
+      using namespace trait;
       // DEBUG:
       auto PrintDIMemDep=[&OS](const MemoryPDGEdge::DIDepT &Dep) -> void {
-        const trait::DIDependence *DistVec;
-        const DIMemoryTraitRef &MTRef=Dep.first;
-        Dep.second.for_each([&OS, &DistVec, &MTRef]<typename DepTrait>() -> void {
-          DistVec=MTRef->get<DepTrait>();
-          OS<<DepTrait::toString()<<" - ";
-        });
-        if (DistVec->getKnownLevel()==0)
-          return;
-        OS<<"<";
-        if (DistVec->getDistance(0).first==DistVec->getDistance(0).second)
+        auto PrintDistVec=[&OS]<typename DepK>(const DIMemoryTraitRef &MT)
+            -> void {
+          const DIDependence *DistVec=MT->get<DepK>();
+          OS<<DepK::toString()<<" - ";
+          if (DistVec->getKnownLevel()==0)
+            return;
+          if (DistVec->getDistance(0).first==DistVec->getDistance(0).second)
             OS<<DistVec->getDistance(0).first;
-        else
-          OS<<"("<<DistVec->getDistance(0).first<<", "<<
-              DistVec->getDistance(0).second<<")";
-        for (int Level=1; Level<DistVec->getKnownLevel(); ++Level)
-          if (DistVec->getDistance(Level).first==DistVec->getDistance(Level).second)
-            OS<<", "<<DistVec->getDistance(Level).first;
           else
-            OS<<", ("<<DistVec->getDistance(Level).first<<", "<<
-                DistVec->getDistance(Level).second<<")";
-        OS<<">";
+            OS<<"("<<DistVec->getDistance(0).first<<", "<<DistVec->
+                getDistance(0).second<<")";
+          for (int Level=1; Level<DistVec->getKnownLevel(); ++Level)
+            if (DistVec->getDistance(Level).first==DistVec->
+                getDistance(Level).second)
+              OS<<", "<<DistVec->getDistance(Level).first;
+            else
+              OS<<", ("<<DistVec->getDistance(Level).first<<", "<<DistVec->
+                  getDistance(Level).second<<")";
+          OS<<">\n";
+        };
+        if (Dep.second.is<Flow>())
+          PrintDistVec.operator()<Flow>(Dep.first);
+        if (Dep.second.is<Anti>())
+          PrintDistVec.operator()<Anti>(Dep.first);
+        if (Dep.second.is<Output>())
+          PrintDistVec.operator()<Output>(Dep.first);
+        if (Dep.second.is<Private>())
+          OS<<Private::toString()<<"\n";
+        if (Dep.second.is<FirstPrivate>())
+          OS<<FirstPrivate::toString()<<"\n";
+        if (Dep.second.is<SecondToLastPrivate>())
+          OS<<SecondToLastPrivate::toString()<<"\n";
+        if (Dep.second.is<LastPrivate>())
+          OS<<LastPrivate::toString()<<"\n";
+        if (Dep.second.is<DynamicPrivate>())
+          OS<<DynamicPrivate::toString()<<"\n";
+        OS.str().pop_back();
       };
-      const MemoryPDGEdge::DIDepStorageT &DIDeps=std::get<MemoryPDGEdge::DIDepStorageT>(E.getMemoryDep());
+      const MemoryPDGEdge::DIDepStorageT &DIDeps=
+          std::get<MemoryPDGEdge::DIDepStorageT>(E.getMemoryDep());
       for (auto &DIMemDep : DIDeps) {
         PrintDIMemDep(DIMemDep);
         OS<<"\n";
@@ -625,16 +644,16 @@ void PDGBuilder::createMemoryDependenceEdges() {
           isReachable(*SrcInstr.getParent(), *DstInstr.getParent()) ||
           isReachable(*DstInstr.getParent(), *SrcInstr.getParent())))
         continue;
-      // unique_ptr<llvm::Dependence> Dep=mDI.depends(&SrcInstr, &DstInstr, true);
+      unique_ptr<llvm::Dependence> Dep=mDI.depends(&SrcInstr, &DstInstr, true);
       MemoryPDGEdge::DIDepStorageT ForwardDIDep, BackwardDIDep;
-      /*if (!Dep)
-        continue;*/
+      if (!Dep)
+        continue;
       // If we have a dependence with its left-most non-'=' direction
       // being '>' we need to reverse the direction of the edge, because
       // the source of the dependence cannot occur after the sink. For
       // confused dependencies, we will create edges in both directions to
       // represent the possibility of a cycle.
-      if (/*Dep->isConfused() &&*/ confirmMemoryIntersect(SrcInstr, DstInstr, ForwardDIDep, BackwardDIDep))
+      if (/*Dep->isConfused() && */confirmMemoryIntersect(SrcInstr, DstInstr, ForwardDIDep, BackwardDIDep))
         // TODO: rewrite
         if (!ForwardDIDep.empty() || !BackwardDIDep.empty()) {
           if (!ForwardDIDep.empty())
@@ -642,10 +661,14 @@ void PDGBuilder::createMemoryDependenceEdges() {
           if (!BackwardDIDep.empty())
             CreateDepEdge(**DstNodeIt, **SrcNodeIt, BackwardDIDep);
         }
-        /*else {
-          CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
-          CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true).release());
-        }*/
+        else {
+          // if (Dep->isConfused()) {
+          CreateDepEdge(**SrcNodeIt, **DstNodeIt, new Dependence(&SrcInstr, &DstInstr));
+          CreateDepEdge(**DstNodeIt, **SrcNodeIt, new Dependence(&DstInstr, &SrcInstr));
+            // CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
+            // CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true).release());
+          // }
+        }
       /*else if (Dep->isOrdered()) {
         if (!Dep->isLoopIndependent()) {
           bool ReversedEdge=false;
@@ -653,7 +676,8 @@ void PDGBuilder::createMemoryDependenceEdges() {
             if (Dep->getDirection(Level)==Dependence::DVEntry::EQ)
               continue;
             else if (Dep->getDirection(Level) == Dependence::DVEntry::GT) {
-              CreateDepEdge(**DstNodeIt, **SrcNodeIt, std::move(Dep));
+              // CreateDepEdge(**DstNodeIt, **SrcNodeIt, std::move(Dep));
+              CreateDepEdge(**DstNodeIt, **SrcNodeIt, Dep.release());
               ReversedEdge=true;
               //++TotalEdgeReversals;
               break;
@@ -661,17 +685,21 @@ void PDGBuilder::createMemoryDependenceEdges() {
             else if (Dep->getDirection(Level)==Dependence::DVEntry::LT)
               break;
             else {
-              CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
-              CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true));
+              // CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
+              CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
+              // CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true));
+              CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true).release());
               ReversedEdge=true;
               break;
             }
           }
           if (!ReversedEdge)
-            CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
+            // CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
+            CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
         }
         else
-          CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
+          // CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
+          CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
       }*/
     }
   }
@@ -942,8 +970,8 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
   for_each_memory(const_cast<Instruction&>(DstInst),
       const_cast<TargetLibraryInfo&>(mTLI), CollectMemory, EvaluateUnknown);
   if (SrcMemLocs.empty() || DstMemLocs.empty())
-    return SrcMemLocs.empty() && !SrcUnknownMemory || DstMemLocs.empty() &&
-        !DstUnknownMemory;
+    return !(SrcMemLocs.empty() && !SrcUnknownMemory || DstMemLocs.empty() &&
+        !DstUnknownMemory);
   SmallVector<const DIMemory*, 2> SrcClientDIMems, SrcServerDIMems,
       DstClientDIMems, DstServerDIMems;
   // SmallSetVector<const DIMemory*, 2> SrcClientDIMems, SrcServerDIMems,
@@ -997,12 +1025,15 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
   }
   if (!HasDependence && FoundMemory)
     return false;
-  // At this point we have dependence confirmed by AliasTrees
+  // At this point we have memory intersection confirmed by AliasTrees,
+  // but this fact doesn't mean the presence of dependence, so we need to
+  // observe trait set
   auto FindDIDependencies=[this, &SrcInst, &DstInst, &NewForwardDep,
       &NewBackwardDep](const SmallVectorImpl<const DIMemory*> &SrcDIMems,
       const SmallVectorImpl<const DIMemory*> &DstDIMems,
-      const SpanningTreeRelation<const DIAliasTree*> &DIATRel) -> void {
+      const SpanningTreeRelation<const DIAliasTree*> &DIATRel) -> bool {
     using namespace trait;
+    using EdgeTraitInfoT=SmallDenseMap<DIMemoryTraitRef, MemoryDescriptor>;
     auto FindCommonLoop=[](const Loop *&SrcL, const Loop *&DstL)
         -> const Loop* {
       if (!SrcL || !DstL)
@@ -1029,83 +1060,102 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
       }
       return nullptr;
     };
-    SmallPtrSet<const trait::DIDependence*, 2> NewDepSet;
-    NewForwardDep.clear();
-    NewBackwardDep.clear();
+    auto AddTrait=[]<typename DepTrait>(EdgeTraitInfoT &EdgeTraits,
+        const DIMemoryTraitRef &Access) -> void {
+      auto It=EdgeTraits.find(Access);
+      if (It!=EdgeTraits.end())
+        It->second.set<DepTrait>();
+      else {
+        MemoryDescriptor NewDK;
+        NewDK.set<DepTrait>();
+        EdgeTraits.insert({Access, NewDK});
+      }
+    };
+    EdgeTraitInfoT ForwTraits, BackwTraits;
+    bool FoundDep=false;
+    const Loop *SrcL=mLI[SrcInst.getParent()], *DstL=mLI[DstInst.getParent()];
     // Attempting to arrange Instruction's DI-mems sets for possible better
     // dependence analysis
-    const SmallVectorImpl<const DIMemory*> *LowerMem, *HigherMem;
-    auto DefineMemOrder=[&LowerMem, &HigherMem, &DIATRel,
-        &SrcDIMems, &DstDIMems]() -> void {
-      for (const DIMemory *SrcMem : SrcDIMems)
-        for (const DIMemory *DstMem : DstDIMems) {
-          const DIAliasNode *SrcAliasN, *DstAliasN;
-          if (SrcMem && DstMem && (SrcAliasN=SrcMem->getAliasNode()) &&
-              (DstAliasN=DstMem->getAliasNode()))
+    const SmallVectorImpl<const DIMemory*> *LowerMem=&SrcDIMems,
+        *HigherMem=&DstDIMems;
+    for (int ExitFlag=0, SrcI=0; SrcI<SrcDIMems.size() && !ExitFlag; ++SrcI)
+      for (int DstI=0; DstI<DstDIMems.size() && !ExitFlag; ++DstI) {
+        const DIAliasNode *SrcAliasN, *DstAliasN;
+        if (SrcDIMems[SrcI] && DstDIMems[DstI] && (SrcAliasN=SrcDIMems[SrcI]->
+            getAliasNode()) && (DstAliasN=DstDIMems[DstI]->getAliasNode()))
+          if (DIATRel.compare(SrcAliasN, DstAliasN)==
+              TreeRelation::TR_ANCESTOR) {
+            LowerMem=&DstDIMems;
+            HigherMem=&SrcDIMems;
+            ExitFlag=1;
+          }
+          else
             if (DIATRel.compare(SrcAliasN, DstAliasN)==
-                TreeRelation::TR_ANCESTOR) {
-              LowerMem=&DstDIMems;
-              HigherMem=&SrcDIMems;
-              return;
+              TreeRelation::TR_DESCENDANT) {
+              LowerMem=&SrcDIMems;
+              HigherMem=&DstDIMems;
+              ExitFlag=1;
             }
-            else
-              if (DIATRel.compare(SrcAliasN, DstAliasN)==
-                TreeRelation::TR_DESCENDANT) {
-                LowerMem=&SrcDIMems;
-                HigherMem=&DstDIMems;
-                return;
-              }
-        }
-        LowerMem=&SrcDIMems;
-        HigherMem=&DstDIMems;
-    };
-    DefineMemOrder();
-    const Loop *SrcL=mLI[SrcInst.getParent()], *DstL=mLI[DstInst.getParent()];
+      }
     while (const Loop *CommonLopp=FindCommonLoop(SrcL, DstL)) {
       const DIDependenceSet *DIDepSet=mDIMInfo.findFromClient(*CommonLopp);
       if (!DIDepSet)
         continue;
       for (const DIMemory *LoMem : *LowerMem) {
         for (const DIAliasTrait &AT : *DIDepSet) {
-          auto MemAccessIt=AT.find(LoMem);
-          if (MemAccessIt==AT.end())
-            continue;
-          const DIMemoryTraitRef &MemAccess=*MemAccessIt;
-          const DIDependence *FlowDep=MemAccess->get<Flow>(),
-              *AntiDep=MemAccess->get<Anti>(),
-              *OutputDep=MemAccess->get<Output>();
-          if (NewDepSet.contains(FlowDep) || NewDepSet.contains(AntiDep) ||
-              NewDepSet.contains(OutputDep))
-            continue;
-          MemoryPDGEdge::DIDepKind FlowDK, AntiDK, OutputDK;
-          FlowDK.set<Flow>();
-          AntiDK.set<Anti>();
-          OutputDK.set<Output>();
-          // First, we check Causes
-          auto CheckCauses=[&SrcInst, &DstInst, &NewForwardDep,
-              &NewBackwardDep, &NewDepSet, &MemAccess](const DIDependence *Dep,
-              MemoryPDGEdge::DIDepKind DK) -> bool {
+          auto CheckCauses=[&SrcInst, &DstInst, &ForwTraits, &BackwTraits,
+              &AddTrait]<typename DepK>(const DIMemoryTraitRef &Access)
+              -> bool {
+            DIDependence *Dep=Access->get<DepK>();
             if (!Dep)
               return false;
             for (const DIDependence::Cause &C : Dep->getCauses())
               if (C.get<DebugLoc>())
                 if (SrcInst.getDebugLoc() && C.get<DebugLoc>()==
                     SrcInst.getDebugLoc()) {
-                  NewForwardDep.push_back({MemAccess, DK});
-                  NewDepSet.insert(Dep);
+                  AddTrait.operator()<DepK>(ForwTraits, Access);
                   return true;
                 }
                 else
                   if (DstInst.getDebugLoc() && C.get<DebugLoc>()==
                       DstInst.getDebugLoc()) {
-                    NewBackwardDep.push_back({MemAccess, DK});
-                    NewDepSet.insert(Dep);
+                    AddTrait.operator()<DepK>(BackwTraits, Access);
                     return true;
                   }
             return false;
           };
-          if (CheckCauses(FlowDep, FlowDK) || CheckCauses(AntiDep, AntiDK) ||
-              CheckCauses(OutputDep, OutputDK))
+          auto CheckPrivateTrait=[&ForwTraits, &BackwTraits, &AddTrait]
+              <typename DepTrait>(const DIMemoryTraitRef &Access) -> bool {
+            if (Access->is<DepTrait>()) {
+              AddTrait.operator()<DepTrait>(ForwTraits, Access);
+              AddTrait.operator()<DepTrait>(BackwTraits, Access);
+              return true;
+            }
+            return false;
+          };
+          auto MemAccessIt=AT.find(LoMem);
+          if (MemAccessIt==AT.end())
+            continue;
+          const DIMemoryTraitRef &MemAccess=*MemAccessIt;
+          // 1.: NoAccess, Readonly, Shared - No dependencies
+          // It is worth to notice, that hasSpuriosDep really excludes some
+          // of deps (mostly containing unions of private-like and shared
+          // traits), which would have been showed otherwise
+          if (hasNoDep(*MemAccess) || hasSpuriousDep(*MemAccess))
+            continue;
+          FoundDep=true;
+          // 2.: Private, FirstPrivate, SecondToLastPrivate, LastPrivate,
+          // DynamicPrivate - All dependencies
+          if (CheckPrivateTrait.operator()<Private>(MemAccess) ||
+              CheckPrivateTrait.operator()<FirstPrivate>(MemAccess) ||
+              CheckPrivateTrait.operator()<SecondToLastPrivate>(MemAccess) ||
+              CheckPrivateTrait.operator()<LastPrivate>(MemAccess) ||
+              CheckPrivateTrait.operator()<DynamicPrivate>(MemAccess))
+            continue;
+          // 3.: Flow, Anti, Output - Concrete dependence
+          if (CheckCauses.operator()<Flow>(MemAccess) ||
+              CheckCauses.operator()<Anti>(MemAccess) ||
+              CheckCauses.operator()<Output>(MemAccess))
             continue;
           auto HiMemIt=find(HigherMem->begin(), HigherMem->end(),
               MemAccess->getMemory());
@@ -1114,47 +1164,44 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
           const DIMemoryTraitSet &DepTS=MemAccess->getSecond();
           if (SrcInst.mayWriteToMemory() && !SrcInst.mayReadFromMemory()) {
             if (DstInst.mayReadFromMemory() && !DstInst.mayWriteToMemory()) {
-              if (FlowDep) {
-                NewForwardDep.push_back({MemAccess, FlowDK});
-                NewDepSet.insert(FlowDep);
-              }
-              if (AntiDep) {
-                NewBackwardDep.push_back({MemAccess, AntiDK});
-                NewDepSet.insert(AntiDep);
-              }
+              if (MemAccess->is<Flow>())
+                AddTrait.operator()<Flow>(ForwTraits, MemAccess);
+              if (MemAccess->is<Anti>())
+                AddTrait.operator()<Anti>(BackwTraits, MemAccess);
             }
             else
               if (DstInst.mayWriteToMemory() && !DstInst.mayReadFromMemory() &&
-                  OutputDep) {
-                NewForwardDep.push_back({MemAccess, OutputDK});
-                NewBackwardDep.push_back({MemAccess, OutputDK});
-                NewDepSet.insert(OutputDep);
+                  MemAccess->is<Output>()) {
+                AddTrait.operator()<Output>(ForwTraits, MemAccess);
+                AddTrait.operator()<Output>(BackwTraits, MemAccess);
               }
           }
           else
             if (SrcInst.mayReadFromMemory() && !SrcInst.mayWriteToMemory() &&
                 DstInst.mayWriteToMemory() && !DstInst.mayReadFromMemory()) {
-              if (FlowDep) {
-                NewBackwardDep.push_back({MemAccess, FlowDK});
-                NewDepSet.insert(FlowDep);
-              }
-              if (AntiDep) {
-                NewForwardDep.push_back({MemAccess, AntiDK});
-                NewDepSet.insert(AntiDep);
-              }
+              if (MemAccess->is<Flow>())
+                AddTrait.operator()<Flow>(BackwTraits, MemAccess);
+              if (MemAccess->is<Anti>())
+                AddTrait.operator()<Anti>(ForwTraits, MemAccess);
             }
         }
       }
     }
+    NewForwardDep.clear();
+    NewBackwardDep.clear();
+    for (auto &DepTrait : ForwTraits)
+      NewForwardDep.push_back(DepTrait);
+    for (auto &DepTrait : BackwTraits)
+      NewBackwardDep.push_back(DepTrait);
+    return FoundDep;
   };
   if (!mDIMInfo)
     return true;
   if (mDIMInfo.isServerAvailable())
-    FindDIDependencies(SrcServerDIMems, DstServerDIMems,
+    return FindDIDependencies(SrcServerDIMems, DstServerDIMems,
         mServerDIATRel.value());
   else
-    FindDIDependencies(SrcClientDIMems, DstClientDIMems, mDIATRel);
-  return true;
+    return FindDIDependencies(SrcClientDIMems, DstClientDIMems, mDIATRel);
 }
 
 char ProgramDependencyGraphPass::ID=0;

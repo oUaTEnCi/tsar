@@ -281,8 +281,10 @@ private:
 
 class MemoryPDGEdge : public PDGEdge {
 public:
-  using DIDepKind=bcl::TraitDescriptor<
-      bcl::TraitAlternative<trait::Flow, trait::Anti, trait::Output>>;
+  /*using DIDepKind=bcl::TraitDescriptor<
+      bcl::TraitAlternative<trait::Flow, trait::Anti, trait::Output>>;*/
+  using DIDepKind=MemoryDescriptor;
+  
   // 1.
   /*using DIDepT=bcl::tagged_pair<
       bcl::tagged<trait::DIDependence, trait::DIDependence>,
@@ -413,12 +415,14 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream&, const ProgramDependencyGraph&)
 class PDGBuilder {
   using MemoryLocationSet=llvm::SmallDenseSet<llvm::MemoryLocation, 2>;
 public:
-  PDGBuilder(ProgramDependencyGraph &G, llvm::DependenceInfo &DI, const llvm::Function &F, const AliasTree &AT,
+  PDGBuilder(ProgramDependencyGraph &G, llvm::DependenceInfo &DI,
+      const llvm::Function &F, const AliasTree &AT,
       const llvm::TargetLibraryInfo &TLI, DIMemoryClientServerInfo &DIMInfo,
-      const llvm::LoopInfo &LI, bool ShouldSolveReachability=true, bool ShouldSimplify=false,
-      bool ShouldCreatePiBlocks=false)
+      const llvm::LoopInfo &LI, bool ShouldSolveReachability=true,
+      bool ShouldSimplify=false, bool ShouldCreatePiBlocks=false)
       : mGraph(G), mDI(DI), mF(F), mAT(AT), mTLI(TLI), mDIMInfo(DIMInfo),
-      mLI(LI), mDIATRel(DIMInfo.DIAT), mSolvedReachability(ShouldSolveReachability),
+      mLI(LI), mDIATRel(DIMInfo.DIAT),
+      mSolvedReachability(ShouldSolveReachability),
       mSimplified(ShouldSimplify), mCreatedPiBlocks(ShouldCreatePiBlocks),
       mBBList(F.size()) {
     if (mDIMInfo.isValid())
@@ -448,10 +452,18 @@ public:
     llvm::DOTFuncInfo DOTCFGInfo(&F);
 		llvm::dumpDotGraphToFile(&DOTCFGInfo, "ircfg.dot", "control flow graph");
     //
+    // Code below prints DIDependenceInfo,
+    // which contains a set of DIAliasTraits for each loop in function
+    // In each DIMemoryTrait it attempts to find NoAccess, ReadOnly, Shared,
+    // Local, Private, FirstPrivate, SecondToLastPrivate, LastPrivate,
+    // DynamicPrivate and, finally, Flow, Anti, Output
+    {
+    using namespace trait;
     for (auto &DepInfoRecord : *mDIMInfo.DIDepInfo) {
       for (const DIAliasTrait &AT : DepInfoRecord.second) {
         for (const DIMemoryTraitRef &MTRef : AT) {
-          auto PrintDistanceVector=[](const trait::DIDependence *Dep) -> std::string {
+          auto PrintDistanceVector=[](const trait::DIDependence *Dep)
+              -> std::string {
             std::string Result;
             llvm::raw_string_ostream OS(Result);
             if (Dep->getKnownLevel()==0)
@@ -460,41 +472,56 @@ public:
             if (Dep->getDistance(0).first==Dep->getDistance(0).second)
                 OS<<Dep->getDistance(0).first;
             else
-              OS<<"("<<Dep->getDistance(0).first<<", "<<Dep->getDistance(0).second<<")";
+              OS<<"("<<Dep->getDistance(0).first<<", "<<
+                  Dep->getDistance(0).second<<")";
             for (int Level=1; Level<Dep->getKnownLevel(); ++Level)
-              if (Dep->getDistance(Level).first==Dep->getDistance(Level).second)
+              if (Dep->getDistance(Level).first==
+                  Dep->getDistance(Level).second)
                 OS<<", "<<Dep->getDistance(Level).first;
               else
-                OS<<", ("<<Dep->getDistance(Level).first<<", "<<Dep->getDistance(Level).second<<")";
+                OS<<", ("<<Dep->getDistance(Level).first<<", "<<
+                    Dep->getDistance(Level).second<<")";
             OS<<">";
             return Result;
           };
+          if (MTRef->is<NoAccess>())
+            std::cout<<"------------NoAccess\n";
+          if (MTRef->is<Readonly>())
+            std::cout<<"------------Readonly\n";
+          if (MTRef->is<Shared>())
+            std::cout<<"------------Shared\n";
+          /*if (MTRef->is<Local>())
+            std::cout<<"  -   -   -Local\n";*/
+          if (MTRef->is<Private>())
+            std::cout<<"------------Private\n";
+          if (MTRef->is<FirstPrivate>())
+            std::cout<<"------------FirstPrivate\n";
+          if (MTRef->is<SecondToLastPrivate>())
+            std::cout<<"------------SecondToLastPrivate\n";
+          if (MTRef->is<LastPrivate>())
+            std::cout<<"------------LastPrivate\n";
+          if (MTRef->is<DynamicPrivate>())
+            std::cout<<"------------DynamicPrivate\n";
           trait::DIDependence *DIFlow=MTRef->get<trait::Flow>(),
               *DIAnti=MTRef->get<trait::Anti>(),
               *DIOutput=MTRef->get<trait::Output>(), *Actual;
-          if (DIFlow) {
-            std::cout<<"      FLOW, causes size - "<<DIFlow->getCauses().size()
-            <<", dist-vec - ";
-            std::cout<<PrintDistanceVector(DIFlow)<<" ";
-          }
-          if (DIAnti) {
-            std::cout<<"      ANTI, causes size - "<<DIAnti->getCauses().size()
-            <<", dist-vec - ";
-            std::cout<<PrintDistanceVector(DIAnti)<<" ";
-          }
-          if (DIOutput) {
-            std::cout<<"      OUTPUT, causes size - "<<DIOutput->getCauses().size()
-            <<", dist-vec - ";
-            std::cout<<PrintDistanceVector(DIOutput);
-          }
-          if (DIFlow || DIAnti || DIOutput)
-            std::cout<<"\n";
-          else
-            std::cout<<"      -\n";
+          if (DIFlow)
+            std::cout<<"------------Flow, "<<PrintDistanceVector(DIFlow)<<
+                ", causes size - "<<DIFlow->getCauses().size()<<"\n";
+          if (DIAnti)
+            std::cout<<"------------Anti, "<<PrintDistanceVector(DIAnti)<<
+                ", causes size - "<<DIAnti->getCauses().size()<<"\n";
+          if (DIOutput)
+            std::cout<<"------------Output, "<<PrintDistanceVector(DIOutput)<<
+                ", causes size - "<<DIOutput->getCauses().size()<<"\n";
+          std::cout<<"--------end of di-memory-trait hasNoDep - "<<
+              hasNoDep(*MTRef)<<", hasSpuriosDep - "<<hasSpuriousDep(*MTRef)<<
+              "\n";
         }
-        std::cout<<"  end of di-alias-trait\n";
+        std::cout<<"----end of di-alias-trait\n";
       }
       std::cout<<"end of di-set-record (pair::MDNode*, DIDependenceSet)\n";
+    }
     }
     //
   }
