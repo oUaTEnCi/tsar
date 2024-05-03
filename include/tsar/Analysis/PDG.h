@@ -2,26 +2,22 @@
 #define TSAR_INCLUDE_BUILDPDG_H
 
 #include "tsar/ADT/SpanningTreeRelation.h"
- #include "tsar/Analysis/Memory/DependenceAnalysis.h"
+#include "tsar/Analysis/Memory/DependenceAnalysis.h"
 #include "tsar/Analysis/Memory/EstimateMemory.h"
 #include "tsar/Analysis/Memory/DIEstimateMemory.h"
 #include "tsar/Analysis/Memory/DIClientServerInfo.h"
+#include "tsar/Analysis/Memory/DIMemoryTrait.h"
 #include "tsar/Analysis/Memory/MemoryAccessUtils.h"
 #include "tsar/Analysis/Clang/SourceCFG.h"
 #include "tsar/Analysis/Passes.h"
 #include <llvm/ADT/DirectedGraph.h>
-#include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/GraphTraits.h>
+#include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/GenericDomTree.h>
 #include <llvm/Support/DOTGraphTraits.h>
-
-// New (before adding tsar's traits in graph):
-#include "tsar/Analysis/Memory/DIMemoryTrait.h"
-#include <llvm/Analysis/LoopInfo.h>
+#include <optional>
 #include <variant>
-#include <iostream>
-//
 
 namespace tsar {
 
@@ -33,17 +29,21 @@ template<typename CDGType>
 class CDGBuilder;
 
 template<typename CFGType, typename CFGNodeType>
-using CDGNodeBase=llvm::DGNode<CDGNode<CFGType, CFGNodeType>, CDGEdge<CFGType, CFGNodeType>>;
+using CDGNodeBase=llvm::DGNode<CDGNode<CFGType, CFGNodeType>, CDGEdge<CFGType,
+    CFGNodeType>>;
 template<typename CFGType, typename CFGNodeType>
-using CDGEdgeBase=llvm::DGEdge<CDGNode<CFGType, CFGNodeType>, CDGEdge<CFGType, CFGNodeType>>;
+using CDGEdgeBase=llvm::DGEdge<CDGNode<CFGType, CFGNodeType>, CDGEdge<CFGType,
+    CFGNodeType>>;
 template<typename CFGType, typename CFGNodeType>
-using CDGBase=llvm::DirectedGraph<CDGNode<CFGType, CFGNodeType>, CDGEdge<CFGType, CFGNodeType>>;
+using CDGBase=llvm::DirectedGraph<CDGNode<CFGType, CFGNodeType>,
+    CDGEdge<CFGType, CFGNodeType>>;
 
 template<typename CFGType, typename CFGNodeType>
 class CDGEdge : public CDGEdgeBase<CFGType, CFGNodeType> {
 public:
   using NodeType=CDGNode<CFGType, CFGNodeType>;
-  CDGEdge(NodeType &TargetNode) : CDGEdgeBase<CFGType, CFGNodeType>(TargetNode){}
+  CDGEdge(NodeType &TargetNode)
+    : CDGEdgeBase<CFGType, CFGNodeType>(TargetNode){}
 };
 
 template<typename CFGType, typename CFGNodeType>
@@ -63,7 +63,9 @@ private:
   using Base=CDGNode<CFGType, CFGNodeType>;
 public:
   EntryCDGNode() : Base(Base::NodeKind::Entry) {}
-  static bool classof(const Base *Node) { return Node->getKind()==Base::NodeKind::Entry; }
+  static bool classof(const Base *Node) {
+    return Node->getKind()==Base::NodeKind::Entry;
+  }
 };
 
 template<typename CFGType, typename CFGNodeType>
@@ -72,8 +74,11 @@ private:
   using Base=CDGNode<CFGType, CFGNodeType>;
 public:
   using NodeValueType=CFGNodeType*;
-  DefaultCDGNode(NodeValueType Block) : Base(Base::NodeKind::Default), mBlock(Block) {}
-  static bool classof(const Base *Node) { return Node->getKind()==Base::NodeKind::Default; }
+  DefaultCDGNode(NodeValueType Block)
+    : Base(Base::NodeKind::Default), mBlock(Block) {}
+  static bool classof(const Base *Node) {
+    return Node->getKind()==Base::NodeKind::Default;
+  }
   inline NodeValueType getBlock() const { return mBlock; }
 private:
   NodeValueType mBlock;
@@ -89,7 +94,6 @@ public:
   using CFGNodeT=CFGNodeType;
   using NodeType=CDGNode<CFGType, CFGNodeType>;
   using EdgeType=CDGEdge<CFGType, CFGNodeType>;
-  // TODO: NodeValueType must be declared once for all DirectedGraph classes
   using NodeValueType=CFGNodeType*;
   using CFGNodeMapType=llvm::DenseMap<NodeValueType, NodeType*>;
 
@@ -114,7 +118,8 @@ public:
   }
 
   inline void bindNodes(NodeType &SourceNode, NodeType &TargetNode) {
-    CDGBase<CFGType, CFGNodeType>::connect(SourceNode, TargetNode, *(new CDGEdge(TargetNode)));
+    CDGBase<CFGType, CFGNodeType>::connect(SourceNode, TargetNode,
+        *(new CDGEdge(TargetNode)));
   }
 
   inline NodeType *getNode(NodeValueType Block) {
@@ -122,7 +127,6 @@ public:
   }
 
   inline NodeType *getEntryNode() { return mEntryNode; }
-
   inline CFGType *getCFG() const { return mCFG; }
 
   ~ControlDependenceGraph() {
@@ -152,9 +156,7 @@ private:
   using CFGType=typename CDGType::CFGT;
   using CFGNodeType=typename CDGType::CFGNodeT;
 public:
-  // TODO: NodeValueType must be declared once for all DirectedGraph classes
   using NodeValueType=typename llvm::GraphTraits<CFGType*>::NodeRef;
-
   CDGBuilder() : mCDG(nullptr) {}
   CDGType *populate(CFGType &_CFG);
 private:
@@ -181,8 +183,10 @@ public:
   };
   PDGNode() : mKind(NodeKind::Entry) {}
   NodeKind getKind() const { return mKind; }
-  bool collectInstructions(llvm::function_ref<bool(llvm::Instruction*)> const &Pred, llvm::SmallVectorImpl<llvm::Instruction*> &IList) const;
-  bool collectEdges(llvm::function_ref<bool(const PDGEdge&)> const &Pred, llvm::SmallVectorImpl<PDGEdge*> &IList) const;
+  bool collectInstructions(llvm::function_ref<bool(llvm::Instruction*)> const
+      &Pred, llvm::SmallVectorImpl<llvm::Instruction*> &IList) const;
+  bool collectEdges(llvm::function_ref<bool(const PDGEdge&)> const &Pred,
+      llvm::SmallVectorImpl<PDGEdge*> &IList) const;
   using PDGNodeBase::findEdgeTo;
   void destroy();
   ~PDGNode() = default;
@@ -214,13 +218,19 @@ public:
     return const_cast<llvm::SmallVectorImpl<llvm::Instruction*>&>(
         static_cast<const SimplePDGNode *>(this)->getInstructions());
   }
-  llvm::Instruction *getFirstInstruction() const { return getInstructions().front(); }
-  llvm::Instruction *getLastInstruction() const { return getInstructions().back(); }
+  llvm::Instruction *getFirstInstruction() const {
+    return getInstructions().front();
+  }
+  llvm::Instruction *getLastInstruction() const {
+    return getInstructions().back();
+  }
   ~SimplePDGNode() = default;
 private:
   /// Append the list of instructions in \p Input to this node.
-  void appendInstructions(const llvm::SmallVectorImpl<llvm::Instruction*> &Input) {
-    mKind=mInstructions.size()+Input.size()>1?NodeKind::MultiInstruction:NodeKind::SingleInstruction;
+  void appendInstructions(const llvm::SmallVectorImpl<llvm::Instruction*>
+      &Input) {
+    mKind=mInstructions.size()+Input.size()>1?NodeKind::MultiInstruction:
+        NodeKind::SingleInstruction;
     llvm::append_range(mInstructions, Input);
   }
   void appendInstructions(const SimplePDGNode &Input) {
@@ -233,10 +243,15 @@ private:
 class PiBlockPDGNode : public PDGNode {
 public:
   template<typename InputIt>
-  PiBlockPDGNode(InputIt First, InputIt Last) : PDGNode(NodeKind::PiBlock), mInlinedNodes(First, Last) {}
+  PiBlockPDGNode(InputIt First, InputIt Last)
+    : PDGNode(NodeKind::PiBlock), mInlinedNodes(First, Last) {}
   llvm::SmallVectorImpl<PDGNode*> &getInlinedNodes() { return mInlinedNodes; }
-  const llvm::SmallVectorImpl<PDGNode*> &getInlinedNodes() const { return mInlinedNodes; }
-  static bool classof(const PDGNode *Node) { return Node->getKind()==NodeKind::PiBlock; }
+  const llvm::SmallVectorImpl<PDGNode*> &getInlinedNodes() const {
+    return mInlinedNodes;
+  }
+  static bool classof(const PDGNode *Node) {
+    return Node->getKind()==NodeKind::PiBlock;
+  }
   ~PiBlockPDGNode();
 private:
   llvm::SmallVector<PDGNode*> mInlinedNodes;
@@ -281,27 +296,14 @@ private:
 
 class MemoryPDGEdge : public PDGEdge {
 public:
-  /*using DIDepKind=bcl::TraitDescriptor<
-      bcl::TraitAlternative<trait::Flow, trait::Anti, trait::Output>>;*/
   using DIDepKind=MemoryDescriptor;
-  
-  // 1.
-  /*using DIDepT=bcl::tagged_pair<
-      bcl::tagged<trait::DIDependence, trait::DIDependence>,
-      bcl::tagged<DIDepKind, DIDepKind>>;*/
-  // 2.
-  /*using DIDepT=bcl::tagged_pair<
-      bcl::tagged<DIMemoryTraitRef, DIMemoryTraitRef>,
-      bcl::tagged<DIDepKind, DIDepKind>>;*/
-  // 3.
   using DIDepT=std::pair<DIMemoryTraitRef, DIDepKind>;
-
   using DIDepStorageT=llvm::SmallVector<DIDepT, 1>;
   using MemDepHandle=std::variant<llvm::Dependence*, DIDepStorageT>;
+
   MemoryPDGEdge(PDGNode &TargetNode, llvm::Dependence &Dep, bool HasDefUse)
       : PDGEdge(TargetNode, HasDefUse?EdgeKind::MixedData:EdgeKind::Memory),
       mMemDep(&Dep) {}
-  
   MemoryPDGEdge(PDGNode &TargetNode,
       const llvm::SmallVectorImpl<DIDepT> &DIDep, bool HasDefUse)
       : PDGEdge(TargetNode, HasDefUse?EdgeKind::MixedData:EdgeKind::Memory) {
@@ -311,15 +313,14 @@ public:
       bool HasDefUse)
       : PDGEdge(TargetNode, HasDefUse?EdgeKind::MixedData:EdgeKind::Memory),
       mMemDep(DepHandle) {}
-  /*bool getDIDeps(llvm::SmallVectorImpl<DIDepT> &V) {
-    if ()
-  }*/
   ~MemoryPDGEdge() {
     if (llvm::Dependence **IRDep=std::get_if<llvm::Dependence*>(&mMemDep))
       delete *IRDep;
   }
-  static bool classof(const PDGEdge *Edge) { return Edge->getKind()==EdgeKind::Memory ||
-      Edge->getKind()==EdgeKind::MixedData; }
+  static bool classof(const PDGEdge *Edge) {
+    return Edge->getKind()==EdgeKind::Memory || Edge->getKind()==
+        EdgeKind::MixedData;
+  }
   const MemDepHandle &getMemoryDep() const { return mMemDep; }
 private:
   MemDepHandle mMemDep;
@@ -336,8 +337,10 @@ public:
     size_t SrcNOrdinal, TgtNordinal;
     PDGEdge &E;
   };
-  ComplexPDGEdge(PDGNode &Dst, PDGEdge &EToInline, size_t SCCOrdinal, const Direction Dir)
-      : PDGEdge(Dst, EToInline.getDependenceType()==DependenceType::Control?EdgeKind::ComplexControl:EdgeKind::ComplexData) {
+  ComplexPDGEdge(PDGNode &Dst, PDGEdge &EToInline, size_t SCCOrdinal,
+      const Direction Dir)
+      : PDGEdge(Dst, EToInline.getDependenceType()==DependenceType::Control?
+      EdgeKind::ComplexControl:EdgeKind::ComplexData) {
     absorbEdge(EToInline, SCCOrdinal, Dir);
   }
   void absorbEdge(PDGEdge &E, size_t SCCOrdinal, const Direction Dir) {
@@ -359,10 +362,16 @@ public:
       else
         mInlinedEdges.push_back({SCCOrdinal, 0, E});
   }
-  static bool classof(const PDGEdge *Edge) { return Edge->getKind()==EdgeKind::ComplexControl ||
-      Edge->getKind()==EdgeKind::ComplexData; }
-  llvm::SmallVectorImpl<EdgeHandle> &getInlinedEdges() { return mInlinedEdges; }
-  const llvm::SmallVectorImpl<EdgeHandle> &getInlinedEdges() const { return mInlinedEdges; }
+  static bool classof(const PDGEdge *Edge) {
+    return Edge->getKind()==EdgeKind::ComplexControl || Edge->getKind()==
+        EdgeKind::ComplexData;
+  }
+  llvm::SmallVectorImpl<EdgeHandle> &getInlinedEdges() {
+    return mInlinedEdges;
+  }
+  const llvm::SmallVectorImpl<EdgeHandle> &getInlinedEdges() const {
+    return mInlinedEdges;
+  }
   ~ComplexPDGEdge() {
     for (EdgeHandle &EH : mInlinedEdges)
       EH.E.destroy();
@@ -376,7 +385,8 @@ class ProgramDependencyGraph : public PDGBase {
 public:
   using NodeType=PDGNode;
   using EdgeType=PDGEdge;
-  ProgramDependencyGraph(const llvm::Function &F) : PDGBase(), mF(F), mEntryNode(nullptr) {}
+  ProgramDependencyGraph(const llvm::Function &F)
+    : PDGBase(), mF(F), mEntryNode(nullptr) {}
   llvm::StringRef getName() const { return mF.getName(); }
   PDGNode &getEntryNode() {
     assert(mEntryNode);
@@ -399,7 +409,6 @@ public:
         E->destroy();
       N->destroy();
     }
-      
   }
 private:
   const llvm::Function &mF;
@@ -410,122 +419,19 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream&, const PDGNode&);
 llvm::raw_ostream &operator<<(llvm::raw_ostream&, const PDGNode::NodeKind);
 llvm::raw_ostream &operator<<(llvm::raw_ostream&, const PDGEdge&);
 llvm::raw_ostream &operator<<(llvm::raw_ostream&, const PDGEdge::EdgeKind);
-llvm::raw_ostream &operator<<(llvm::raw_ostream&, const ProgramDependencyGraph&);
+llvm::raw_ostream &operator<<(llvm::raw_ostream&,
+    const ProgramDependencyGraph&);
 
 class PDGBuilder {
   using MemoryLocationSet=llvm::SmallDenseSet<llvm::MemoryLocation, 2>;
 public:
-  PDGBuilder(ProgramDependencyGraph &G, llvm::DependenceInfo &DI,
-      const llvm::Function &F, const AliasTree &AT,
-      const llvm::TargetLibraryInfo &TLI, DIMemoryClientServerInfo &DIMInfo,
-      const llvm::LoopInfo &LI, bool ShouldSolveReachability=true,
-      bool ShouldSimplify=false, bool ShouldCreatePiBlocks=false)
-      : mGraph(G), mDI(DI), mF(F), mAT(AT), mTLI(TLI), mDIMInfo(DIMInfo),
-      mLI(LI), mDIATRel(DIMInfo.DIAT),
-      mSolvedReachability(ShouldSolveReachability),
-      mSimplified(ShouldSimplify), mCreatedPiBlocks(ShouldCreatePiBlocks),
-      mBBList(F.size()) {
-    if (mDIMInfo.isValid())
-      mServerDIATRel=SpanningTreeRelation<const DIAliasTree*>(mDIMInfo.DIAT);
-    {
-      size_t BBIdx=F.size();
-      for (auto It=llvm::po_begin(&F); It!=llvm::po_end(&F); ++It)
-        mBBList[--BBIdx]=*It;
-    }
-    if (ShouldSolveReachability)
-      solveReachability();
-    // New (before adding tsar's traits in graph):
-    /*const DIDependencInfo &DepInfo=*mDIMInfo.DIDepInfo;
-    for (auto &DepInfoRecord : DepInfo) {
-      for (const DIAliasTrait &Trait : DepInfoRecord.second) {
-        auto NodeIt=mReverseDIDepSet.find(Trait.getNode());
-        if (NodeIt!=mReverseDIDepSet.end())
-          NodeIt->second.insert(&Trait);
-        else
-          mReverseDIDepSet.insert({Trait.getNode(), {&Trait}});
-      }
-    }*/
-    // DEBUG (this code demonstrates the absence of causes in DIDependence):
-    if (!mDIMInfo.isValid())
-      return;
-    //
-    llvm::DOTFuncInfo DOTCFGInfo(&F);
-		llvm::dumpDotGraphToFile(&DOTCFGInfo, "ircfg.dot", "control flow graph");
-    //
-    // Code below prints DIDependenceInfo,
-    // which contains a set of DIAliasTraits for each loop in function
-    // In each DIMemoryTrait it attempts to find NoAccess, ReadOnly, Shared,
-    // Local, Private, FirstPrivate, SecondToLastPrivate, LastPrivate,
-    // DynamicPrivate and, finally, Flow, Anti, Output
-    {
-    using namespace trait;
-    for (auto &DepInfoRecord : *mDIMInfo.DIDepInfo) {
-      for (const DIAliasTrait &AT : DepInfoRecord.second) {
-        for (const DIMemoryTraitRef &MTRef : AT) {
-          auto PrintDistanceVector=[](const trait::DIDependence *Dep)
-              -> std::string {
-            std::string Result;
-            llvm::raw_string_ostream OS(Result);
-            if (Dep->getKnownLevel()==0)
-              return Result;
-            OS<<"<";
-            if (Dep->getDistance(0).first==Dep->getDistance(0).second)
-                OS<<Dep->getDistance(0).first;
-            else
-              OS<<"("<<Dep->getDistance(0).first<<", "<<
-                  Dep->getDistance(0).second<<")";
-            for (int Level=1; Level<Dep->getKnownLevel(); ++Level)
-              if (Dep->getDistance(Level).first==
-                  Dep->getDistance(Level).second)
-                OS<<", "<<Dep->getDistance(Level).first;
-              else
-                OS<<", ("<<Dep->getDistance(Level).first<<", "<<
-                    Dep->getDistance(Level).second<<")";
-            OS<<">";
-            return Result;
-          };
-          if (MTRef->is<NoAccess>())
-            std::cout<<"------------NoAccess\n";
-          if (MTRef->is<Readonly>())
-            std::cout<<"------------Readonly\n";
-          if (MTRef->is<Shared>())
-            std::cout<<"------------Shared\n";
-          /*if (MTRef->is<Local>())
-            std::cout<<"  -   -   -Local\n";*/
-          if (MTRef->is<Private>())
-            std::cout<<"------------Private\n";
-          if (MTRef->is<FirstPrivate>())
-            std::cout<<"------------FirstPrivate\n";
-          if (MTRef->is<SecondToLastPrivate>())
-            std::cout<<"------------SecondToLastPrivate\n";
-          if (MTRef->is<LastPrivate>())
-            std::cout<<"------------LastPrivate\n";
-          if (MTRef->is<DynamicPrivate>())
-            std::cout<<"------------DynamicPrivate\n";
-          trait::DIDependence *DIFlow=MTRef->get<trait::Flow>(),
-              *DIAnti=MTRef->get<trait::Anti>(),
-              *DIOutput=MTRef->get<trait::Output>(), *Actual;
-          if (DIFlow)
-            std::cout<<"------------Flow, "<<PrintDistanceVector(DIFlow)<<
-                ", causes size - "<<DIFlow->getCauses().size()<<"\n";
-          if (DIAnti)
-            std::cout<<"------------Anti, "<<PrintDistanceVector(DIAnti)<<
-                ", causes size - "<<DIAnti->getCauses().size()<<"\n";
-          if (DIOutput)
-            std::cout<<"------------Output, "<<PrintDistanceVector(DIOutput)<<
-                ", causes size - "<<DIOutput->getCauses().size()<<"\n";
-          std::cout<<"--------end of di-memory-trait hasNoDep - "<<
-              hasNoDep(*MTRef)<<", hasSpuriosDep - "<<hasSpuriousDep(*MTRef)<<
-              "\n";
-        }
-        std::cout<<"----end of di-alias-trait\n";
-      }
-      std::cout<<"end of di-set-record (pair::MDNode*, DIDependenceSet)\n";
-    }
-    }
-    //
-  }
+  PDGBuilder(ProgramDependencyGraph &G, const llvm::Function &F,
+    llvm::DependenceInfo &DI, const AliasTree &AT,
+    DIMemoryClientServerInfo &DIMInfo, const llvm::TargetLibraryInfo &TLI,
+    const llvm::LoopInfo &LI, bool SolveReachability=true,
+    bool Simplify=false, bool CreatePiBlocks=false);
   ~PDGBuilder() = default;
+
   void populate() {
     computeInstructionOrdinals();
     createFineGrainedNodes();
@@ -536,6 +442,7 @@ public:
     // simplify();
     createPiBlocks();
   }
+  
   static bool shouldShadow(const llvm::Instruction &I) {
     return I.isDebugOrPseudoInst() || I.isLifetimeStartOrEnd();
   }
@@ -543,7 +450,9 @@ private:
   struct ReachabilityMatrix : public std::vector<bool> {
     size_t NodesCount;
     ReachabilityMatrix() = default;
-    ReachabilityMatrix(size_t _NodesCount) : std::vector<bool>(_NodesCount*_NodesCount, false), NodesCount(_NodesCount) {}
+    ReachabilityMatrix(size_t _NodesCount)
+      : std::vector<bool>(_NodesCount*_NodesCount, false),
+        NodesCount(_NodesCount) {}
     std::vector<bool>::reference operator()(size_t I, size_t J) {
       return this->operator[](I*NodesCount+J);
     }
@@ -579,7 +488,8 @@ private:
       const llvm::Instruction&, MemoryPDGEdge::DIDepStorageT&,
       MemoryPDGEdge::DIDepStorageT&);
 
-  /// Part of code, inherited from AbstractDependenceGraphBuilder and partially redefined
+  /// Part of code, inherited from AbstractDependenceGraphBuilder
+  // and partially redefined
   void computeInstructionOrdinals();
   void createFineGrainedNodes();
   void createDefUseEdges();
@@ -587,16 +497,19 @@ private:
   void createControlDependenceEdges();
   void simplify();
   void createPiBlocks();
+
   PDGNode &createFineGrainedNode(const llvm::Instruction &I) {
     PDGNode *NewNode=new SimplePDGNode(const_cast<llvm::Instruction&>(I));
     mGraph.addNode(*NewNode);
     return *NewNode;
   }
+
   PDGEdge &createDefUseEdge(PDGNode &Src, PDGNode &Tgt) {
     PDGEdge *NewEdge=new PDGEdge(Tgt, PDGEdge::DependenceType::Data);
     mGraph.connect(Src, Tgt, *NewEdge);
     return *NewEdge;
   }
+
   bool areNodesMergeable(const PDGNode &Src, const PDGNode &Tgt) const {
     using namespace llvm;
     // Only merge two nodes if they are both simple nodes and the consecutive
@@ -606,15 +519,20 @@ private:
     if (!SimpleSrc || !SimpleTgt)
       return false;
     return true;
-    //return SimpleSrc->getLastInstruction()->getParent()==SimpleTgt->getFirstInstruction()->getParent();
+    /*return SimpleSrc->getLastInstruction()->getParent()==
+        SimpleTgt->getFirstInstruction()->getParent();*/
   }
+
   void mergeNodes(PDGNode &AbsorbN, PDGNode &OutgoingN) {
     using namespace llvm;
     PDGEdge &EdgeToFold=AbsorbN.back();
-    assert(AbsorbN.getEdges().size()==1 && EdgeToFold.getTargetNode()==OutgoingN && "Expected A to have a single edge to B.");
-    assert(isa<SimplePDGNode>(&AbsorbN) && isa<SimplePDGNode>(&OutgoingN) && "Expected simple nodes");
+    assert(AbsorbN.getEdges().size()==1 && EdgeToFold.getTargetNode()==
+        OutgoingN && "Expected A to have a single edge to B.");
+    assert(isa<SimplePDGNode>(&AbsorbN) && isa<SimplePDGNode>(&OutgoingN) &&
+        "Expected simple nodes");
     // Copy instructions from B to the end of A.
-    cast<SimplePDGNode>(&AbsorbN)->appendInstructions(*cast<SimplePDGNode>(&OutgoingN));
+    cast<SimplePDGNode>(&AbsorbN)->
+        appendInstructions(*cast<SimplePDGNode>(&OutgoingN));
     // Move to A any outgoing edges from B.
     for (PDGEdge *OutgoingE : OutgoingN)
       mGraph.connect(AbsorbN, OutgoingE->getTargetNode(), *OutgoingE);
@@ -623,33 +541,33 @@ private:
     mGraph.removeNode(OutgoingN);
     OutgoingN.destroy();
   }
-  PiBlockPDGNode &createPiBlock(const llvm::SmallVectorImpl<PDGNode*> &NodeList) {
+
+  PiBlockPDGNode &createPiBlock(const llvm::SmallVectorImpl<PDGNode*>
+      &NodeList) {
     PiBlockPDGNode *Res=new PiBlockPDGNode(NodeList.begin(), NodeList.end());
     mGraph.addNode(*Res);
     return *Res;
   }
+
   size_t getOrdinal(const llvm::Instruction &I) {
     assert(mInstOrdinalMap.find(&I) != mInstOrdinalMap.end() &&
       "No ordinal computed for this instruction.");
     return mInstOrdinalMap[&I];
   }
+
   size_t getOrdinal(PDGNode &N) {
     assert(mNodeOrdinalMap.find(&N)!=mNodeOrdinalMap.end() &&
       "No ordinal computed for this node.");
     return mNodeOrdinalMap[&N];
   }
-  //
+
   llvm::DenseMap<const llvm::Instruction*, PDGNode*> mIMap;
   llvm::DenseMap<const llvm::Instruction*, size_t> mInstOrdinalMap;
   llvm::DenseMap<PDGNode*, size_t> mNodeOrdinalMap;
   llvm::DependenceInfo &mDI;
   llvm::SmallVector<const llvm::BasicBlock*, 8> mBBList;
   //
-
-  // New (before adding tsar's traits in graph):
   const llvm::LoopInfo &mLI;
-  // llvm::DenseMap<const DIAliasNode*, llvm::SmallPtrSet<const DIAliasTrait*, 2>> mReverseDIDepSet;
-
   ProgramDependencyGraph &mGraph;
   const llvm::Function &mF;
   const AliasTree &mAT;
@@ -659,16 +577,18 @@ private:
   llvm::DenseMap<const llvm::BasicBlock*, size_t> mBBToInd;
   DIMemoryClientServerInfo &mDIMInfo;
   std::optional<SpanningTreeRelation<const DIAliasTree*>> mServerDIATRel;
-  SpanningTreeRelation<const DIAliasTree*> mDIATRel;
+  SpanningTreeRelation<const DIAliasTree*> mClientDIATRel;
 };
 } //namespace tsar
 
 namespace llvm {
 
-class ProgramDependencyGraphPass : public FunctionPass, private bcl::Uncopyable {
+class ProgramDependencyGraphPass
+  : public FunctionPass, private bcl::Uncopyable {
 public:
   static char ID;
-  ProgramDependencyGraphPass() : FunctionPass(ID), mPDGBuilder(nullptr), mPDG(nullptr) {
+  ProgramDependencyGraphPass()
+    : FunctionPass(ID), mPDGBuilder(nullptr), mPDG(nullptr) {
     initializeProgramDependencyGraphPassPass(*PassRegistry::getPassRegistry());
   }
   bool runOnFunction(Function &F) override;
@@ -693,12 +613,14 @@ private:
 template<typename CFGType, typename CFGNodeType>
 struct GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*> {
   using NodeRef=tsar::CDGNode<CFGType, CFGNodeType>*;
-  static tsar::CDGNode<CFGType, CFGNodeType> *CDGGetTargetNode(tsar::CDGEdge<CFGType, CFGNodeType> *E) {
+  static tsar::CDGNode<CFGType, CFGNodeType> *CDGGetTargetNode(tsar::CDGEdge<
+      CFGType, CFGNodeType> *E) {
     return &E->getTargetNode();
   }
-  using ChildIteratorType=mapped_iterator<typename tsar::CDGNode<CFGType, CFGNodeType>::iterator,
-      decltype(&CDGGetTargetNode)>;
-  using ChildEdgeIteratorType=typename tsar::CDGNode<CFGType, CFGNodeType>::iterator;
+  using ChildIteratorType=mapped_iterator<typename tsar::CDGNode<CFGType,
+      CFGNodeType>::iterator, decltype(&CDGGetTargetNode)>;
+  using ChildEdgeIteratorType=typename tsar::CDGNode<CFGType, CFGNodeType>::
+      iterator;
   static NodeRef getEntryNode(NodeRef N) { return N; }
   static ChildIteratorType child_begin(NodeRef N) {
     return ChildIteratorType(N->begin(), &CDGGetTargetNode);
@@ -715,51 +637,67 @@ struct GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*> {
 template<typename CFGType, typename CFGNodeType>
 struct GraphTraits<tsar::ControlDependenceGraph<CFGType, CFGNodeType>*> :
     public GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*> {
-  using nodes_iterator=typename tsar::ControlDependenceGraph<CFGType, CFGNodeType>::iterator;
-  static typename llvm::GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*>::NodeRef getEntryNode(tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
+  using nodes_iterator=typename tsar::ControlDependenceGraph<CFGType,
+      CFGNodeType>::iterator;
+  static typename llvm::GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*>::
+      NodeRef getEntryNode(tsar::ControlDependenceGraph<CFGType, CFGNodeType>
+      *Graph) {
     return Graph->getEntryNode();
   }
-  static nodes_iterator nodes_begin(tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
+  static nodes_iterator nodes_begin(tsar::ControlDependenceGraph<CFGType,
+      CFGNodeType> *Graph) {
     return Graph->begin();
   }
-  static nodes_iterator nodes_end(tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
+  static nodes_iterator nodes_end(tsar::ControlDependenceGraph<CFGType,
+      CFGNodeType> *Graph) {
     return Graph->end();
   }
   using EdgeRef=tsar::CDGEdge<CFGType, CFGNodeType>*;
-  static typename llvm::GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*>::NodeRef edge_dest(EdgeRef E) { return &E->getTargetNode(); }
-  static unsigned size(tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) { return Graph->size(); }
+  static typename llvm::GraphTraits<tsar::CDGNode<CFGType, CFGNodeType>*>::
+      NodeRef edge_dest(EdgeRef E) { return &E->getTargetNode(); }
+  static unsigned size(tsar::ControlDependenceGraph<CFGType, CFGNodeType>
+      *Graph) { return Graph->size(); }
 };
 
 template<typename CFGType, typename CFGNodeType>
 struct DOTGraphTraits<tsar::ControlDependenceGraph<CFGType, CFGNodeType>*> :
     public DOTGraphTraits<CFGType*> {
 private:
-  using GTInstanced=GraphTraits<tsar::ControlDependenceGraph<CFGType, CFGNodeType>*>;
+  using GTInstanced=GraphTraits<tsar::ControlDependenceGraph<CFGType,
+      CFGNodeType>*>;
 public:
   DOTGraphTraits(bool IsSimple=false) : DOTGraphTraits<CFGType*>(IsSimple) {}
-  static std::string getGraphName(const tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
+  static std::string getGraphName(const tsar::ControlDependenceGraph<CFGType,
+      CFGNodeType> *Graph) {
     return "Control Dependence Graph";
   }
   std::string getNodeLabel(const tsar::CDGNode<CFGType, CFGNodeType> *Node,
       const tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
-    if (auto *DefNode=dyn_cast<tsar::DefaultCDGNode<CFGType, CFGNodeType>>(Node))
-      return DOTGraphTraits<CFGType*>::getNodeLabel(DefNode->getBlock(), Graph->getCFG());
+    if (auto *DefNode=dyn_cast<tsar::DefaultCDGNode<CFGType,
+        CFGNodeType>>(Node))
+      return DOTGraphTraits<CFGType*>::getNodeLabel(DefNode->getBlock(),
+          Graph->getCFG());
     else
       return "Entry";
   }
-  std::string getNodeAttributes(const tsar::CDGNode<CFGType, CFGNodeType> *Node,
-      tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
-    if (auto *DefNode=dyn_cast<tsar::DefaultCDGNode<CFGType, CFGNodeType>>(Node))
-      return DOTGraphTraits<CFGType*>::getNodeAttributes(DefNode->getBlock(), Graph->getCFG());
+  std::string getNodeAttributes(const tsar::CDGNode<CFGType,
+      CFGNodeType> *Node, tsar::ControlDependenceGraph<CFGType, CFGNodeType>
+      *Graph) {
+    if (auto *DefNode=dyn_cast<tsar::DefaultCDGNode<CFGType,
+        CFGNodeType>>(Node))
+      return DOTGraphTraits<CFGType*>::getNodeAttributes(DefNode->getBlock(),
+          Graph->getCFG());
     else
       return "";
   }
-  std::string getEdgeSourceLabel(const tsar::CDGNode<CFGType, CFGNodeType> *Node,
-      typename GraphTraits<tsar::ControlDependenceGraph<CFGType, CFGNodeType>*>::ChildIteratorType It) { return ""; }
-  std::string getEdgeAttributes(const tsar::CDGNode<CFGType, CFGNodeType> *Node,
-      typename GTInstanced::ChildIteratorType EdgeIt,
+  std::string getEdgeSourceLabel(const tsar::CDGNode<CFGType, CFGNodeType>
+      *Node, typename GraphTraits<tsar::ControlDependenceGraph<CFGType,
+      CFGNodeType>*>::ChildIteratorType It) { return ""; }
+  std::string getEdgeAttributes(const tsar::CDGNode<CFGType, CFGNodeType>
+      *Node, typename GTInstanced::ChildIteratorType EdgeIt,
       tsar::ControlDependenceGraph<CFGType, CFGNodeType> *Graph) {
-    //return DOTGraphTraits<CFGType*>::getEdgeAttributes(Node->getBlock(), EdgeIt, Graph->getCFG());
+    /*return DOTGraphTraits<CFGType*>::getEdgeAttributes(Node->getBlock(),
+        EdgeIt, Graph->getCFG());*/
     return "";
   }
   bool isNodeHidden(const tsar::CDGNode<CFGType, CFGNodeType> *Node,
@@ -770,7 +708,8 @@ public:
 
 template <> struct GraphTraits<tsar::PDGNode*> {
   using NodeRef=tsar::PDGNode *;
-  static tsar::PDGNode *PDGGetTargetNode(DGEdge<tsar::PDGNode, tsar::PDGEdge> *P) {
+  static tsar::PDGNode *PDGGetTargetNode(DGEdge<tsar::PDGNode,
+      tsar::PDGEdge> *P) {
     return &P->getTargetNode();
   }
   // Provide a mapped iterator so that the GraphTrait-based implementations can
@@ -792,7 +731,8 @@ template <> struct GraphTraits<tsar::PDGNode*> {
 };
 
 template <>
-struct GraphTraits<tsar::ProgramDependencyGraph *> : public GraphTraits<tsar::PDGNode *> {
+struct GraphTraits<tsar::ProgramDependencyGraph *>
+    : public GraphTraits<tsar::PDGNode *> {
   using nodes_iterator = tsar::ProgramDependencyGraph::iterator;
   static NodeRef getEntryNode(tsar::ProgramDependencyGraph *DG) {
     return &DG->getEntryNode();
@@ -800,16 +740,19 @@ struct GraphTraits<tsar::ProgramDependencyGraph *> : public GraphTraits<tsar::PD
   static nodes_iterator nodes_begin(tsar::ProgramDependencyGraph *DG) {
     return DG->begin();
   }
-  static nodes_iterator nodes_end(tsar::ProgramDependencyGraph *DG) { return DG->end(); }
+  static nodes_iterator nodes_end(tsar::ProgramDependencyGraph *DG) {
+    return DG->end();
+  }
 };
 
 template <> struct GraphTraits<const tsar::PDGNode *> {
   using NodeRef=const tsar::PDGNode *;
-  static const tsar::PDGNode *PDGGetTargetNode(const DGEdge<tsar::PDGNode, tsar::PDGEdge> *P) {
+  static const tsar::PDGNode *PDGGetTargetNode(const DGEdge<tsar::PDGNode,
+      tsar::PDGEdge> *P) {
     return &P->getTargetNode();
   }
-  using ChildIteratorType =
-    mapped_iterator<tsar::PDGNode::const_iterator, decltype(&PDGGetTargetNode)>;
+  using ChildIteratorType=mapped_iterator<tsar::PDGNode::const_iterator,
+      decltype(&PDGGetTargetNode)>;
   using ChildEdgeIteratorType = tsar::PDGNode::const_iterator;
   static NodeRef getEntryNode(NodeRef N) { return N; }
   static ChildIteratorType child_begin(NodeRef N) {
@@ -847,10 +790,13 @@ struct DOTGraphTraits<const tsar::ProgramDependencyGraph *>
     assert(G && "expected a valid pointer to the graph.");
     return "PDG for '"+std::string(G->getName())+"'";
   }
-  std::string getNodeLabel(const tsar::PDGNode *Node, const tsar::ProgramDependencyGraph *Graph);
+  std::string getNodeLabel(const tsar::PDGNode *Node,
+      const tsar::ProgramDependencyGraph *Graph);
   std::string getEdgeAttributes(const tsar::PDGNode *Node,
-      GraphTraits<const tsar::PDGNode *>::ChildIteratorType I, const tsar::ProgramDependencyGraph *G);
-  static bool isNodeHidden(const tsar::PDGNode *Node, const tsar::ProgramDependencyGraph *G);
+      GraphTraits<const tsar::PDGNode *>::ChildIteratorType I,
+      const tsar::ProgramDependencyGraph *G);
+  static bool isNodeHidden(const tsar::PDGNode *Node,
+      const tsar::ProgramDependencyGraph *G);
 private:
   static std::string getSimpleNodeLabel(const tsar::PDGNode *Node,
       const tsar::ProgramDependencyGraph *G);

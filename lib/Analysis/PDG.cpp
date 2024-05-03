@@ -2,20 +2,14 @@
 #include "tsar/Support/PassGroupRegistry.h"
 #include "tsar/Core/Query.h"
 #include <llvm/ADT/DepthFirstIterator.h>
+#include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/EnumeratedArray.h>
 #include <llvm/ADT/SCCIterator.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/InitializePasses.h>
 
-// New (before adding tsar's traits in graph):
-#include <iostream>
-// ???
-#include <llvm/ADT/SmallSet.h>
-//
-
 using namespace tsar;
 using namespace llvm;
-using namespace std;
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "pdg"
@@ -25,7 +19,7 @@ STATISTIC(TotalDefUseEdges, "Number of def-use edges created.");
 STATISTIC(TotalMemoryEdges, "Number of memory dependence edges created.");
 STATISTIC(TotalFineGrainedNodes, "Number of fine-grained nodes created.");
 STATISTIC(TotalPiBlockNodes, "Number of pi-block nodes created.");
-STATISTIC(TotalConfusedEdges, "Number of confused memory dependencies between two nodes.");
+STATISTIC(TotalConfusedLLVMEdges, "Number of confused memory dependencies between two nodes.");
 STATISTIC(TotalEdgeReversals, "Number of times the source and sink of dependence was reversed to expose cycles in the graph.");
 
 using PDG=ProgramDependencyGraph;
@@ -35,15 +29,16 @@ namespace llvm {
 template<>
 struct DOTGraphTraits<Function*>
     : public DOTGraphTraits<DOTFuncInfo*> {
-  DOTGraphTraits(bool isSimple=false) : DOTGraphTraits<DOTFuncInfo*>(isSimple) {}
-  string getNodeLabel(const BasicBlock *Node, Function*) {
+  DOTGraphTraits(bool isSimple=false)
+    : DOTGraphTraits<DOTFuncInfo*>(isSimple) {}
+  std::string getNodeLabel(const BasicBlock *Node, Function*) {
     return DOTGraphTraits<DOTFuncInfo*>::getNodeLabel(Node, nullptr);
   }
-  string getNodeAttributes(const BasicBlock *Node, Function *F) {
+  std::string getNodeAttributes(const BasicBlock *Node, Function *F) {
     DOTFuncInfo DOTInfo(F);
     return DOTGraphTraits<DOTFuncInfo*>::getNodeAttributes(Node, &DOTInfo);
   }
-  string getEdgeAttributes(const BasicBlock *Node,
+  std::string getEdgeAttributes(const BasicBlock *Node,
       const_succ_iterator EdgeIt, Function *F) {
     DOTFuncInfo DOTInfo(F);
     return DOTGraphTraits<DOTFuncInfo*>::getEdgeAttributes(Node, EdgeIt,
@@ -129,7 +124,7 @@ public:
 
 namespace {
 template<typename KeyT, typename ValueT, typename Container>
-void addToMap(map<KeyT, Container> &Map, KeyT Key, ValueT Value) {
+void addToMap(std::map<KeyT, Container> &Map, KeyT Key, ValueT Value) {
   auto It=Map.find(Key);
   if (It!=Map.end())
     Map[Key].insert(Value);
@@ -149,7 +144,7 @@ bool hasEdgesTo(NodeType *SourceN, NodeType *TargetN) {
 
 template<typename CDGType>
 inline void CDGBuilder<CDGType>::processControlDependence() {
-  map<typename CDGType::NodeType*, set<NodeValueType>> DepInfo;
+  std::map<typename CDGType::NodeType*, std::set<NodeValueType>> DepInfo;
   for (auto NIt=GraphTraits<CFGType*>::nodes_begin(mCFG); NIt!=
       GraphTraits<CFGType*>::nodes_end(mCFG); ++NIt)
     mCDG->emplaceNode(*NIt);
@@ -173,12 +168,12 @@ inline void CDGBuilder<CDGType>::processControlDependence() {
 template<typename CDGType>
 CDGType *CDGBuilder<CDGType>::populate(CFGType &CFG) {
   mCFG=&CFG;
-  mCDG=new CDGType(string(CFG.getName()), &CFG);
+  mCDG=new CDGType(std::string(CFG.getName()), &CFG);
   mPDT=PostDomTreeBase<CFGNodeType>();
   mPDT.recalculate(*mCFG);
-  /*May be useful*/
-  //dumpDotGraphToFile(&mPDT, "post-dom-tree.dot", "post-dom-tree");
-  /**/
+  /*May be useful
+  dumpDotGraphToFile(&mPDT, "post-dom-tree.dot", "post-dom-tree");
+  */
   processControlDependence();
   return mCDG;
 }
@@ -426,7 +421,6 @@ std::string PDGDotGraphTraits::getVerboseEdgeAttributes(const PDGNode *Src,
     const PDGEdge *Edge, const PDG *G) {
   std::string Str;
   raw_string_ostream OS(Str);
-  // DEBUG:
   auto PrintMemoryEdge=[&OS](const MemoryPDGEdge &E) {
     if (llvm::Dependence * const *Dep=std::get_if<llvm::Dependence*>(&E.
         getMemoryDep())) {
@@ -435,7 +429,6 @@ std::string PDGDotGraphTraits::getVerboseEdgeAttributes(const PDGNode *Src,
     }
     else {
       using namespace trait;
-      // DEBUG:
       auto PrintDIMemDep=[&OS](const MemoryPDGEdge::DIDepT &Dep) -> void {
         auto PrintDistVec=[&OS]<typename DepK>(const DIMemoryTraitRef &MT)
             -> void {
@@ -481,16 +474,12 @@ std::string PDGDotGraphTraits::getVerboseEdgeAttributes(const PDGNode *Src,
         PrintDIMemDep(DIMemDep);
         OS<<"\n";
       }
-      //
     }
   };
-  //
   if (const MemoryPDGEdge *MemDepEdge=dyn_cast<MemoryPDGEdge>(Edge)) {
     OS<<"label=\"[";
-    // DEBUG:
     PrintMemoryEdge(*MemDepEdge);
     OS.str().pop_back();
-    //	
     OS<<"]\"";
   }
   else
@@ -507,19 +496,20 @@ std::string PDGDotGraphTraits::getVerboseEdgeAttributes(const PDGNode *Src,
             OS<<"def-use & ";
           case EdgeKind::Memory:
             PrintMemoryEdge(cast<MemoryPDGEdge>(E));
-            // cast<MemoryPDGEdge>(E).getMemoryDep().dump(OS);
-            // OS.str().pop_back();
             return OS.str();
           case EdgeKind::Control:
             return "control";
           default:
-            llvm_unreachable("Only simple edges can be inlined in complex edge");
+            llvm_unreachable(
+                "Only simple edges can be inlined in complex edge");
         }
       };
       OS<<"label=\"";
-      for (const ComplexPDGEdge::EdgeHandle &EH : ComplexEdge->getInlinedEdges()) {
+      for (const ComplexPDGEdge::EdgeHandle &EH : ComplexEdge->
+          getInlinedEdges()) {
         if (!isNodeHidden(&EH.E.getTargetNode(), G))
-          OS<<"("<<EH.SrcNOrdinal+1<<", "<<EH.TgtNordinal+1<<") "<<StringifyInlinedEdge(EH.E)<<"\n";
+          OS<<"("<<EH.SrcNOrdinal+1<<", "<<EH.TgtNordinal+1<<") "<<
+              StringifyInlinedEdge(EH.E)<<"\n";
       }
       OS<<"\"";
     }
@@ -545,6 +535,106 @@ std::string PDGDotGraphTraits::getEdgeStyle(const tsar::PDGEdge *Edge) {
 //===--------------------------------------------------------------------===//
 // End of PDG DOT Printer Implementation
 //===--------------------------------------------------------------------===//
+PDGBuilder::PDGBuilder(PDG &G, const Function &F, DependenceInfo &DI,
+    const AliasTree &AT, DIMemoryClientServerInfo &DIMInfo,
+    const TargetLibraryInfo &TLI, const LoopInfo &LI, bool SolveReachability,
+    bool Simplify, bool CreatePiBlocks)
+    : mGraph(G), mF(F), mDI(DI), mAT(AT), mDIMInfo(DIMInfo), mTLI(TLI),
+    mLI(LI), mSolvedReachability(SolveReachability), mSimplified(Simplify),
+    mCreatedPiBlocks(CreatePiBlocks), mClientDIATRel(DIMInfo.ClientDIAT),
+    mBBList(F.size()) {
+  if (mDIMInfo.isValid())
+    mServerDIATRel=SpanningTreeRelation<const DIAliasTree*>(mDIMInfo.DIAT);
+  {
+    size_t BBIdx=F.size();
+    for (auto It=po_begin(&F); It!=po_end(&F); ++It)
+      mBBList[--BBIdx]=*It;
+  }
+  if (SolveReachability)
+    solveReachability();
+  LLVM_DEBUG(
+    {
+    DOTFuncInfo DOTCFGInfo(&F);
+    dumpDotGraphToFile(&DOTCFGInfo, "ircfg.dot", "control flow graph");
+    if (!mDIMInfo.isValid())
+      return;
+    // Code below prints DIDependenceInfo,
+    // which contains a set of DIAliasTraits for each loop in function
+    // In each DIMemoryTrait it attempts to find NoAccess, ReadOnly, Shared,
+    // Local, Private, FirstPrivate, SecondToLastPrivate, LastPrivate,
+    // DynamicPrivate and, finally, Flow, Anti, Output
+    auto PrintDIDepInfo=[](const DIDependencInfo &DIDepInfo) -> void {
+      using namespace trait;
+      dbgs()<<"==== Start of DIDependenceInfo Printing! ===\n";
+      for (auto &DepInfoRecord : DIDepInfo) {
+        for (const DIAliasTrait &AT : DepInfoRecord.second) {
+          for (const DIMemoryTraitRef &MTRef : AT) {
+            auto PrintDistanceVector=[](const trait::DIDependence *Dep)
+                -> std::string {
+              std::string Result;
+              llvm::raw_string_ostream OS(Result);
+              if (Dep->getKnownLevel()==0)
+                return Result;
+              OS<<"<";
+              if (Dep->getDistance(0).first==Dep->getDistance(0).second)
+                  OS<<Dep->getDistance(0).first;
+              else
+                OS<<"("<<Dep->getDistance(0).first<<", "<<
+                    Dep->getDistance(0).second<<")";
+              for (int Level=1; Level<Dep->getKnownLevel(); ++Level)
+                if (Dep->getDistance(Level).first==
+                    Dep->getDistance(Level).second)
+                  OS<<", "<<Dep->getDistance(Level).first;
+                else
+                  OS<<", ("<<Dep->getDistance(Level).first<<", "<<
+                      Dep->getDistance(Level).second<<")";
+              OS<<">";
+              return Result;
+            };
+            if (MTRef->is<NoAccess>())
+              dbgs()<<"------------NoAccess\n";
+            if (MTRef->is<Readonly>())
+              dbgs()<<"------------Readonly\n";
+            if (MTRef->is<Shared>())
+              dbgs()<<"------------Shared\n";
+            /*if (MTRef->is<Local>())
+               dbgs()<<"  -   -   -Local\n";*/
+            if (MTRef->is<Private>())
+              dbgs()<<"------------Private\n";
+            if (MTRef->is<FirstPrivate>())
+              dbgs()<<"------------FirstPrivate\n";
+            if (MTRef->is<SecondToLastPrivate>())
+              dbgs()<<"------------SecondToLastPrivate\n";
+            if (MTRef->is<LastPrivate>())
+              dbgs()<<"------------LastPrivate\n";
+            if (MTRef->is<DynamicPrivate>())
+              dbgs()<<"------------DynamicPrivate\n";
+            trait::DIDependence *DIFlow=MTRef->get<trait::Flow>();
+            trait::DIDependence *DIAnti=MTRef->get<trait::Anti>();
+            trait::DIDependence *DIOutput=MTRef->get<trait::Output>();
+            if (DIFlow)
+              dbgs()<<"------------Flow, "<<PrintDistanceVector(DIFlow)<<
+                  ", causes size - "<<DIFlow->getCauses().size()<<"\n";
+            if (DIAnti)
+              dbgs()<<"------------Anti, "<<PrintDistanceVector(DIAnti)<<
+                  ", causes size - "<<DIAnti->getCauses().size()<<"\n";
+            if (DIOutput)
+              dbgs()<<"------------Output, "<<PrintDistanceVector(DIOutput)
+                  <<", causes size - "<<DIOutput->getCauses().size()<<"\n";
+            dbgs()<<"--------end of di-memory-trait hasNoDep - "<<
+                hasNoDep(*MTRef)<<", hasSpuriosDep - "<<hasSpuriousDep(*MTRef)
+                <<"\n";
+          }
+          dbgs()<<"----end of di-alias-trait\n";
+        }
+        dbgs()<<"end of di-set-record (pair::MDNode*, DIDependenceSet)\n";
+      }
+      dbgs()<<"=== End of DIDependenceInfo Printing ===\n";
+    };
+    PrintDIDepInfo(*mDIMInfo.DIDepInfo);
+    }
+  );
+}
 
 void PDGBuilder::computeInstructionOrdinals() {
   // The BBList is expected to be in program order.
@@ -627,12 +717,13 @@ void PDGBuilder::createMemoryDependenceEdges() {
           Src.removeEdge(*DefUseEdges.front());
           DefUseEdges.front()->destroy();
           DefUseEdges.clear();
-          assert(mGraph.connect(Src, Tgt, *(new MemoryPDGEdge(Tgt, Dep, true))));
-          // assert(mGraph.connect(Src, Tgt, *(new MemoryPDGEdge(Tgt, *Dep.release(), true))));
+          assert(mGraph.connect(Src, Tgt, *(new MemoryPDGEdge(Tgt, Dep,
+              true))));
         }
         else
-          assert(mGraph.connect(Src, Tgt, *(new MemoryPDGEdge(Tgt, Dep, false))));
-          // assert(mGraph.connect(Src, Tgt, *(new MemoryPDGEdge(Tgt, *Dep.release(), false))));
+          assert(mGraph.connect(Src, Tgt, *(new MemoryPDGEdge(Tgt, Dep,
+              false))));
+        ++TotalMemoryEdges;
       };
       if (**SrcNodeIt==**DstNodeIt)
         continue;
@@ -644,7 +735,8 @@ void PDGBuilder::createMemoryDependenceEdges() {
           isReachable(*SrcInstr.getParent(), *DstInstr.getParent()) ||
           isReachable(*DstInstr.getParent(), *SrcInstr.getParent())))
         continue;
-      unique_ptr<llvm::Dependence> Dep=mDI.depends(&SrcInstr, &DstInstr, true);
+      std::unique_ptr<llvm::Dependence> Dep=mDI.depends(&SrcInstr, &DstInstr,
+          true);
       MemoryPDGEdge::DIDepStorageT ForwardDIDep, BackwardDIDep;
       if (!Dep)
         continue;
@@ -653,54 +745,55 @@ void PDGBuilder::createMemoryDependenceEdges() {
       // the source of the dependence cannot occur after the sink. For
       // confused dependencies, we will create edges in both directions to
       // represent the possibility of a cycle.
-      if (/*Dep->isConfused() && */confirmMemoryIntersect(SrcInstr, DstInstr, ForwardDIDep, BackwardDIDep))
-        // TODO: rewrite
+      if (Dep->isConfused() && confirmMemoryIntersect(SrcInstr, DstInstr,
+          ForwardDIDep, BackwardDIDep)) {
         if (!ForwardDIDep.empty() || !BackwardDIDep.empty()) {
           if (!ForwardDIDep.empty())
             CreateDepEdge(**SrcNodeIt, **DstNodeIt, ForwardDIDep);
-          if (!BackwardDIDep.empty())
+          if (!BackwardDIDep.empty()) {
             CreateDepEdge(**DstNodeIt, **SrcNodeIt, BackwardDIDep);
+            ++TotalEdgeReversals;
+          }
         }
         else {
-          // if (Dep->isConfused()) {
-          CreateDepEdge(**SrcNodeIt, **DstNodeIt, new Dependence(&SrcInstr, &DstInstr));
-          CreateDepEdge(**DstNodeIt, **SrcNodeIt, new Dependence(&DstInstr, &SrcInstr));
-            // CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
-            // CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true).release());
-          // }
+          /*CreateDepEdge(**SrcNodeIt, **DstNodeIt, new Dependence(&SrcInstr,
+              &DstInstr));
+          CreateDepEdge(**DstNodeIt, **SrcNodeIt, new Dependence(&DstInstr,
+              &SrcInstr));*/
+          CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
+          CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&DstInstr,
+              &SrcInstr, true).release());
+          ++TotalConfusedLLVMEdges;
         }
-      /*else if (Dep->isOrdered()) {
+        continue;
+      }
+      if (Dep->isOrdered()) {
         if (!Dep->isLoopIndependent()) {
           bool ReversedEdge=false;
           for (unsigned Level=1; Level<=Dep->getLevels(); ++Level) {
             if (Dep->getDirection(Level)==Dependence::DVEntry::EQ)
               continue;
-            else if (Dep->getDirection(Level) == Dependence::DVEntry::GT) {
-              // CreateDepEdge(**DstNodeIt, **SrcNodeIt, std::move(Dep));
+            if (Dep->getDirection(Level) == Dependence::DVEntry::GT) {
               CreateDepEdge(**DstNodeIt, **SrcNodeIt, Dep.release());
               ReversedEdge=true;
-              //++TotalEdgeReversals;
+              ++TotalEdgeReversals;
               break;
             }
-            else if (Dep->getDirection(Level)==Dependence::DVEntry::LT)
+            if (Dep->getDirection(Level)==Dependence::DVEntry::LT)
               break;
-            else {
-              // CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
-              CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
-              // CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true));
-              CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&SrcInstr, &DstInstr, true).release());
-              ReversedEdge=true;
-              break;
-            }
+            CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
+            CreateDepEdge(**DstNodeIt, **SrcNodeIt, mDI.depends(&DstInstr,
+                &SrcInstr, true).release());
+            ReversedEdge=true;
+            ++TotalConfusedLLVMEdges;
+            break;
           }
           if (!ReversedEdge)
-            // CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
             CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
         }
         else
-          // CreateDepEdge(**SrcNodeIt, **DstNodeIt, std::move(Dep));
           CreateDepEdge(**SrcNodeIt, **DstNodeIt, Dep.release());
-      }*/
+      }
     }
   }
 }
@@ -720,9 +813,8 @@ void PDGBuilder::createControlDependenceEdges() {
           if (InstrPDGNodeIt!=mIMap.end()) {
             PDGEdge &NewPDGEdge=*(new PDGEdge(*InstrPDGNodeIt->second,
                 PDGEdge::DependenceType::Control));
-            // DEBUG:
-            assert(mGraph.connect(SrcNode, *InstrPDGNodeIt->second, NewPDGEdge));
-            //
+            assert(mGraph.connect(SrcNode, *InstrPDGNodeIt->second,
+                NewPDGEdge));
           }
         }
       }
@@ -816,9 +908,10 @@ void PDGBuilder::simplify() {
       "Expected target to be in the in-degree map.");
     // Do not merge if there is also an edge from target to src (immediate
     // cycle).
-    if (TargetInDegreeMap[&Tgt]!=1 || !areNodesMergeable(Src, Tgt) || Tgt.hasEdgeTo(Src))
+    if (TargetInDegreeMap[&Tgt]!=1 || !areNodesMergeable(Src, Tgt) ||
+        Tgt.hasEdgeTo(Src))
       continue;
-    // LLVM_DEBUG(dbgs()<<"Merging:"<<Src<<"\nWith:"<<Tgt<<"\n");
+    LLVM_DEBUG(dbgs()<<"Merging:"<<Src<<"\nWith:"<<Tgt<<"\n");
     mergeNodes(Src, Tgt);
     // If the target node is in the candidate set itself, we need to put the
     // src node back into the worklist again so it gives the target a chance
@@ -860,11 +953,13 @@ void PDGBuilder::createPiBlocks() {
   // list of nodes in an SCC. Note: trivial SCCs containing a single node are
   // ignored.
   SmallVector<NodeListType, 4> ListOfSCCs;
-  for (const vector<PDGNode*> &SCC : make_range(scc_begin(&mGraph), scc_end(&mGraph)))
+  for (const std::vector<PDGNode*> &SCC : make_range(scc_begin(&mGraph),
+      scc_end(&mGraph)))
     if (SCC.size()>1)
       ListOfSCCs.emplace_back(SCC.begin(), SCC.end());
   for (NodeListType &NL : ListOfSCCs) {
-    LLVM_DEBUG(dbgs()<<"Creating pi-block node with "<<NL.size()<<" nodes in it.\n");
+    LLVM_DEBUG(dbgs()<<"Creating pi-block node with "<<NL.size()<<
+        " nodes in it.\n");
     // SCC iterator may put the nodes in an order that's different from the
     // program order. To preserve original program order, we sort the list of
     // nodes based on ordinal numbers computed earlier.
@@ -900,15 +995,18 @@ void PDGBuilder::createPiBlocks() {
       using Direction=typename ComplexPDGEdge::Direction;
       using EdgeKind=typename PDGEdge::EdgeKind;
       using DependenceType=typename PDGEdge::DependenceType;
-      EnumeratedArray<ComplexPDGEdge*, DependenceType> NewEdges[Direction::DirectionCount] {nullptr, nullptr};
+      EnumeratedArray<ComplexPDGEdge*, DependenceType>
+          NewEdges[Direction::DirectionCount] {nullptr, nullptr};
       for (size_t SCCNodeI=0; SCCNodeI<NL.size(); ++SCCNodeI) {
-        auto ReconnectEdges=[this, &PiNode, &NewEdges, SCCNodeI](PDGNode &Src, PDGNode &Dst, const Direction Dir) {
+        auto ReconnectEdges=[this, &PiNode, &NewEdges, SCCNodeI]
+            (PDGNode &Src, PDGNode &Dst, const Direction Dir) {
           SmallVector<PDGEdge*, 10> EL;
           Src.findEdgesTo(Dst, EL);
           if (EL.empty())
             return;
-          LLVM_DEBUG(dbgs()<<"reconnecting("<<(Dir==Direction::Incoming?"incoming)":"outgoing)")
-              <<":\nSrc:"<<Src<<"\nDst:"<<Dst<<"\nNew:"<<PiNode<<"\n");
+          LLVM_DEBUG(dbgs()<<"reconnecting("<<(Dir==Direction::Incoming?
+              "incoming)":"outgoing)")<<":\nSrc:"<<Src<<"\nDst:"<<Dst<<
+              "\nNew:"<<PiNode<<"\n");
           for (PDGEdge *OldEdge : EL) {
             DependenceType Type=OldEdge->getDependenceType();
             if (NewEdges[Dir][Type]) {
@@ -917,14 +1015,18 @@ void PDGBuilder::createPiBlocks() {
             }
             else {
               if (Dir==Direction::Incoming) {
-                NewEdges[Dir][Type]=new ComplexPDGEdge(PiNode, *OldEdge, SCCNodeI, Dir);
+                NewEdges[Dir][Type]=new ComplexPDGEdge(PiNode, *OldEdge,
+                    SCCNodeI, Dir);
                 mGraph.connect(Src, PiNode, *NewEdges[Dir][Type]);
-                LLVM_DEBUG(dbgs()<<"created complex edge from Src to PiNode.\n");
+                LLVM_DEBUG(dbgs()<<
+                    "created complex edge from Src to PiNode.\n");
               }
               else {
-                NewEdges[Dir][Type]=new ComplexPDGEdge(Dst, *OldEdge, SCCNodeI, Dir);
+                NewEdges[Dir][Type]=new ComplexPDGEdge(Dst, *OldEdge, SCCNodeI,
+                    Dir);
                 mGraph.connect(PiNode, Dst, *NewEdges[Dir][Type]);
-                LLVM_DEBUG(dbgs()<<"created complex edge from PiNode to Dst.\n");
+                LLVM_DEBUG(dbgs()<<
+                    "created complex edge from PiNode to Dst.\n");
               }
             }
             Src.removeEdge(*OldEdge);
@@ -932,7 +1034,8 @@ void PDGBuilder::createPiBlocks() {
             /*if (OldEdge->getKind()==PDGEdge::EdgeKind::ComplexControl
                 || OldEdge->getKind()==PDGEdge::EdgeKind::ComplexData) {
               OldEdge->destroy();
-              LLVM_DEBUG(dbgs()<<"released memory from old complex edge between Src and Dst.\n\n");
+              LLVM_DEBUG(dbgs()<<"released memory from old complex edge \\
+                  between Src and Dst.\n\n");
             }*/
           }
         };
@@ -972,64 +1075,71 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
   if (SrcMemLocs.empty() || DstMemLocs.empty())
     return !(SrcMemLocs.empty() && !SrcUnknownMemory || DstMemLocs.empty() &&
         !DstUnknownMemory);
-  SmallVector<const DIMemory*, 2> SrcClientDIMems, SrcServerDIMems,
-      DstClientDIMems, DstServerDIMems;
-  // SmallSetVector<const DIMemory*, 2> SrcClientDIMems, SrcServerDIMems,
-  //     DstClientDIMems, DstServerDIMems;
+  enum InfoType {
+    Client,
+    Server,
+    Last=Server
+  };
+  EnumeratedArray<SmallVector<const DIMemory*, 2>, InfoType> SrcDIMems,
+      DstDIMems;
+  /*EnumeratedArray<SmallSetVector<const DIMemory*, 2>, InfoType> SrcDIMems,
+      DstDIMems;*/
   auto FillDIMemories=[this, &SrcInst](const MemoryLocationSet &MemLocs,
-      SmallVectorImpl<const DIMemory*> &DIMemories,
-      SmallVectorImpl<const DIMemory*> &ServerDIMemories) {
+      SmallVectorImpl<const DIMemory*> &ClientDIMems,
+      SmallVectorImpl<const DIMemory*> &ServerDIMems) {
     for (auto &MemLoc : MemLocs) {
       const EstimateMemory *EstMem=mAT.find(MemLoc);
       const MDNode *Metadata;
       while (!(Metadata=getRawDIMemoryIfExists(*EstMem, mF.getContext(),
           mF.getParent()->getDataLayout(), mAT.getDomTree())))
         EstMem=EstMem->getParent();
-      DIMemories.push_back(&*mDIMInfo.ClientDIAT->find(*Metadata));
+      ClientDIMems.push_back(&*mDIMInfo.ClientDIAT->find(*Metadata));
       if (mDIMInfo.isServerAvailable())
-        ServerDIMemories.push_back(mDIMInfo.findFromClient(*EstMem,
+        ServerDIMems.push_back(mDIMInfo.findFromClient(*EstMem,
             SrcInst.getModule()->getDataLayout(),
             const_cast<DominatorTree&>(mAT.getDomTree())).get<Clone>());
     }
   };
-  FillDIMemories(SrcMemLocs, SrcClientDIMems, SrcServerDIMems);
-  FillDIMemories(DstMemLocs, DstClientDIMems, DstServerDIMems);
-  bool HasDependence=false, FoundMemory=false;
-  for (int SrcI=0; SrcI<SrcClientDIMems.size() && !HasDependence; ++SrcI) {
-    const DIAliasNode *SrcDINode, *SrcServerDINode;
-    for (int DstI=0; DstI<DstClientDIMems.size() && !HasDependence; ++DstI) {
-      const DIAliasNode *DstDINode, *DstServerDINode;
+  FillDIMemories(SrcMemLocs, SrcDIMems[Client], SrcDIMems[Server]);
+  FillDIMemories(DstMemLocs, DstDIMems[Client], DstDIMems[Server]);
+  bool HasDependence=false;
+  EnumeratedArray<bool, InfoType> FoundDINode(false);
+  for (int SrcI=0; SrcI<SrcDIMems[Client].size() && !HasDependence; ++SrcI) {
+    EnumeratedArray<const DIAliasNode*, InfoType> SrcDINode(nullptr);
+    for (int DstI=0; DstI<DstDIMems[Client].size() && !HasDependence; ++DstI) {
+      EnumeratedArray<const DIAliasNode*, InfoType> DstDINode(nullptr);
       if (
         mDIMInfo.isServerAvailable() &&
-        SrcServerDIMems[SrcI] &&
-        DstServerDIMems[DstI] &&
-        (SrcServerDINode=SrcServerDIMems[SrcI]->getAliasNode()) &&
-        (DstServerDINode=DstServerDIMems[DstI]->getAliasNode())
+        SrcDIMems[Server][SrcI] &&
+        DstDIMems[Server][DstI] &&
+        (SrcDINode[Server]=SrcDIMems[Server][SrcI]->getAliasNode()) &&
+        (DstDINode[Server]=DstDIMems[Server][DstI]->getAliasNode())
         ) {
-        if (mServerDIATRel.value().compare(SrcServerDINode, DstServerDINode)!=
-            TreeRelation::TR_UNREACHABLE)
+        if (mServerDIATRel.value().compare(SrcDINode[Server],
+            DstDINode[Server])!=TreeRelation::TR_UNREACHABLE)
           HasDependence=true;
       }
       else
         if (
-          SrcClientDIMems[SrcI] &&
-          DstClientDIMems[DstI] &&
-          (SrcDINode=SrcClientDIMems[SrcI]->getAliasNode()) &&
-          (DstDINode=DstClientDIMems[DstI]->getAliasNode()) &&
-          mDIATRel.compare(SrcDINode, DstDINode)!=TreeRelation::TR_UNREACHABLE
-          )
+          SrcDIMems[Client][SrcI] &&
+          DstDIMems[Client][DstI] &&
+          (SrcDINode[Client]=SrcDIMems[Client][SrcI]->getAliasNode()) &&
+          (DstDINode[Client]=DstDIMems[Client][DstI]->getAliasNode()) &&
+          mClientDIATRel.compare(SrcDINode[Client], DstDINode[Client])!=
+              TreeRelation::TR_UNREACHABLE)
           HasDependence=true;
-      FoundMemory|=SrcDINode && DstDINode || SrcServerDINode &&
-          DstServerDINode;
+      FoundDINode[Client]|=SrcDINode[Client] && DstDINode[Client];
+      FoundDINode[Server]|=SrcDINode[Server] && DstDINode[Server];
     }
   }
-  if (!HasDependence && FoundMemory)
+  if (!HasDependence && (FoundDINode[Client] || FoundDINode[Server]))
     return false;
   // At this point we have memory intersection confirmed by AliasTrees,
-  // but this fact doesn't mean the presence of dependence, so we need to
-  // observe trait set
+  // but this fact doesn't mean the presence of loop-carried dependence, so we
+  // need to observe trait set
   auto FindDIDependencies=[this, &SrcInst, &DstInst, &NewForwardDep,
-      &NewBackwardDep](const SmallVectorImpl<const DIMemory*> &SrcDIMems,
+      &NewBackwardDep](
+      const SmallVectorImpl<const DIMemory*> &SrcDIMems,
       const SmallVectorImpl<const DIMemory*> &DstDIMems,
       const SpanningTreeRelation<const DIAliasTree*> &DIATRel) -> bool {
     using namespace trait;
@@ -1038,16 +1148,14 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
         -> const Loop* {
       if (!SrcL || !DstL)
         return nullptr;
-      if (SrcL->getLoopDepth()<DstL->getLoopDepth()) {
-        unsigned LargerNL=DstL->getLoopDepth();
-        for (; LargerNL>SrcL->getLoopDepth(); --LargerNL)
+      if (SrcL->getLoopDepth()<DstL->getLoopDepth())
+        for (unsigned LargerNL=DstL->getLoopDepth(); LargerNL>SrcL->
+            getLoopDepth(); --LargerNL)
           DstL=DstL->getParentLoop();
-      }
-      else {
-        unsigned LargerNL=SrcL->getLoopDepth();
-        for (; LargerNL>DstL->getLoopDepth(); --LargerNL)
+      else
+        for (unsigned LargerNL=SrcL->getLoopDepth(); LargerNL>DstL->
+            getLoopDepth(); --LargerNL)
           SrcL=SrcL->getParentLoop();
-      }
       while (SrcL!=DstL) {
         SrcL=SrcL->getParentLoop();
         DstL=DstL->getParentLoop();
@@ -1072,7 +1180,7 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
       }
     };
     EdgeTraitInfoT ForwTraits, BackwTraits;
-    bool FoundDep=false;
+    bool FoundDep=false, FoundTrait=false;
     const Loop *SrcL=mLI[SrcInst.getParent()], *DstL=mLI[DstInst.getParent()];
     // Attempting to arrange Instruction's DI-mems sets for possible better
     // dependence analysis
@@ -1097,11 +1205,11 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
               ExitFlag=1;
             }
       }
-    while (const Loop *CommonLopp=FindCommonLoop(SrcL, DstL)) {
-      const DIDependenceSet *DIDepSet=mDIMInfo.findFromClient(*CommonLopp);
+    while (const Loop *CommonLoop=FindCommonLoop(SrcL, DstL)) {
+      const DIDependenceSet *DIDepSet=mDIMInfo.findFromClient(*CommonLoop);
       if (!DIDepSet)
         continue;
-      for (const DIMemory *LoMem : *LowerMem) {
+      for (const DIMemory *LoMem : *LowerMem)
         for (const DIAliasTrait &AT : *DIDepSet) {
           auto CheckCauses=[&SrcInst, &DstInst, &ForwTraits, &BackwTraits,
               &AddTrait]<typename DepK>(const DIMemoryTraitRef &Access)
@@ -1137,11 +1245,16 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
           if (MemAccessIt==AT.end())
             continue;
           const DIMemoryTraitRef &MemAccess=*MemAccessIt;
+          auto HiMemIt=std::find(HigherMem->begin(), HigherMem->end(),
+              MemAccess->getMemory());
+          if (HiMemIt==HigherMem->end())
+            continue;
           // 1.: NoAccess, Readonly, Shared - No dependencies
           // It is worth to notice, that hasSpuriosDep really excludes some
           // of deps (mostly containing unions of private-like and shared
           // traits), which would have been showed otherwise
-          if (hasNoDep(*MemAccess) || hasSpuriousDep(*MemAccess))
+          FoundTrait=true;
+          if (hasNoDep(*MemAccess) /*|| hasSpuriousDep(*MemAccess)*/)
             continue;
           FoundDep=true;
           // 2.: Private, FirstPrivate, SecondToLastPrivate, LastPrivate,
@@ -1156,10 +1269,6 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
           if (CheckCauses.operator()<Flow>(MemAccess) ||
               CheckCauses.operator()<Anti>(MemAccess) ||
               CheckCauses.operator()<Output>(MemAccess))
-            continue;
-          auto HiMemIt=find(HigherMem->begin(), HigherMem->end(),
-              MemAccess->getMemory());
-          if (HiMemIt==HigherMem->end())
             continue;
           const DIMemoryTraitSet &DepTS=MemAccess->getSecond();
           if (SrcInst.mayWriteToMemory() && !SrcInst.mayReadFromMemory()) {
@@ -1185,7 +1294,6 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
                 AddTrait.operator()<Anti>(ForwTraits, MemAccess);
             }
         }
-      }
     }
     NewForwardDep.clear();
     NewBackwardDep.clear();
@@ -1193,15 +1301,19 @@ bool PDGBuilder::confirmMemoryIntersect(const Instruction &SrcInst,
       NewForwardDep.push_back(DepTrait);
     for (auto &DepTrait : BackwTraits)
       NewBackwardDep.push_back(DepTrait);
-    return FoundDep;
+    return FoundDep || !FoundTrait;
   };
-  if (!mDIMInfo)
+  if (!mDIMInfo.isValid())
     return true;
-  if (mDIMInfo.isServerAvailable())
-    return FindDIDependencies(SrcServerDIMems, DstServerDIMems,
+  if (FoundDINode[Server])
+    return FindDIDependencies(SrcDIMems[Server], DstDIMems[Server],
         mServerDIATRel.value());
   else
-    return FindDIDependencies(SrcClientDIMems, DstClientDIMems, mDIATRel);
+    if (FoundDINode[Client])
+      return FindDIDependencies(SrcDIMems[Client], DstDIMems[Client],
+          mClientDIATRel);
+    else
+      return true;
 }
 
 char ProgramDependencyGraphPass::ID=0;
@@ -1240,13 +1352,13 @@ bool ProgramDependencyGraphPass::runOnFunction(Function &F) {
       getAnalysis<TargetLibraryInfoWrapperPass>();
   DIMemoryClientServerInfo DIMInfo(const_cast<DIAliasTree&>(DIEMPass.
       getAliasTree()), *this, F);
-  mPDG=new ProgramDependencyGraph(F);
+  mPDG=new PDG(F);
   mPDGBuilder=new PDGBuilder(*mPDG,
-    DIPass.getDI(),
     F,
+    DIPass.getDI(),
     EMPass.getAliasTree(),
-    TLIPass.getTLI(F),
     DIMInfo,
+    TLIPass.getTLI(F),
     LIPass.getLoopInfo(),
     true);
   mPDGBuilder->populate();
